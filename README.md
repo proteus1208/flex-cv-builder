@@ -44,18 +44,27 @@ A single object is coerced to a one-item array (logged as Info in the Debug Erro
 
 ## Scripts
 
-```bash
-chmod +x scripts/*.sh
-./scripts/dev.sh           # run UI (Windows)
-./scripts/build.sh         # framework-dependent publish
-./scripts/build-single.sh  # self-contained single-file win-x64 → artifacts/CvGenerator/
-```
-
-On Windows you can run the same commands from Git Bash, or:
+**Windows (PowerShell):**
 
 ```powershell
-dotnet run --project src/CvGenerator.App
-dotnet publish src/CvGenerator.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/CvGenerator
+.\scripts\dev.ps1           # run UI
+.\scripts\build.ps1         # framework-dependent publish
+.\scripts\build-single.ps1  # self-contained single-file → artifacts\CvGenerator\
+```
+
+If PowerShell blocks scripts:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+**Git Bash / Linux:**
+
+```bash
+chmod +x scripts/*.sh
+./scripts/dev.sh
+./scripts/build.sh
+./scripts/build-single.sh
 ```
 
 ## UI layout
