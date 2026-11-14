@@ -56,13 +56,24 @@ public sealed partial class TemplateSyntaxValidator
                 continue;
             }
 
-            if (PlaceholderPatterns.ArrayStart().IsMatch(token))
+            if (PlaceholderPatterns.IsArrayStart(token, out ArrayMarker startMarker))
             {
-                var name = PlaceholderPatterns.ArrayStart().Match(token).Groups[1].Value;
-                if (!PlaceholderPatterns.TryParseQualifiedArrayName(name, out _, out _))
+                var name = startMarker.Source;
+                var validSource =
+                    PlaceholderPatterns.TryParseQualifiedArrayName(name, out _, out _) ||
+                    PlaceholderPatterns.TryParseAliasQualifiedSource(name, out _, out _);
+                if (!validSource)
                 {
                     issues.Error("InvalidArrayStart", "Template",
-                        $"Invalid ArrayStart name '{name}'. Use `skills` or `skills_i.detail`.", token);
+                        $"Invalid ArrayStart source '{name}'. Use `skills`, `skills_i.detail`, or `skill.detail`.", token);
+                }
+                else if (startMarker.Alias != null &&
+                         startMarker.Alias.Equals(name, StringComparison.OrdinalIgnoreCase) &&
+                         !name.Contains('.'))
+                {
+                    issues.Warning("AliasSameAsSource", "Template",
+                        $"Iterate alias '{startMarker.Alias}' matches the array name — prefer a short alias like `item`.", token);
+                    starts.Add((name, token));
                 }
                 else
                 {
@@ -72,10 +83,9 @@ public sealed partial class TemplateSyntaxValidator
                 continue;
             }
 
-            if (PlaceholderPatterns.ArrayEnd().IsMatch(token))
+            if (PlaceholderPatterns.IsArrayEnd(token, out ArrayMarker endMarker))
             {
-                var name = PlaceholderPatterns.ArrayEnd().Match(token).Groups[1].Value;
-                ends.Add((name, token));
+                ends.Add((endMarker.Source, token));
                 continue;
             }
 

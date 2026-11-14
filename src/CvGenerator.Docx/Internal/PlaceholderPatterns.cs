@@ -4,13 +4,23 @@ namespace CvGenerator.Docx.Internal;
 
 internal sealed record LoopReference(IReadOnlyList<string> Chain, string? FieldPath);
 
+/// <summary>
+/// ${ArrayStart source [alias]} / ${ArrayEnd source [alias]}
+/// source: experience | skills_i.detail | skill.detail
+/// alias: optional iterate name used instead of source_i
+/// </summary>
+internal sealed record ArrayMarker(string Source, string? Alias);
+
 internal static partial class PlaceholderPatterns
 {
-    // ${ArrayStart name} / ${ArrayEnd name} — name may be "skills" or "skills_i.detail"
-    [GeneratedRegex(@"\$\{\s*ArrayStart\s+([A-Za-z_][A-Za-z0-9_.]*)\s*\}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(
+        @"\$\{\s*ArrayStart\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\}",
+        RegexOptions.IgnoreCase)]
     public static partial Regex ArrayStart();
 
-    [GeneratedRegex(@"\$\{\s*ArrayEnd\s+([A-Za-z_][A-Za-z0-9_.]*)\s*\}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(
+        @"\$\{\s*ArrayEnd\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\}",
+        RegexOptions.IgnoreCase)]
     public static partial Regex ArrayEnd();
 
     [GeneratedRegex(@"\$\{([^{}]+)\}")]
@@ -21,22 +31,32 @@ internal static partial class PlaceholderPatterns
     [GeneratedRegex(@"([A-Za-z_][A-Za-z0-9_]*)_i")]
     private static partial Regex LoopSegment();
 
-    public static bool IsArrayStart(string text, out string arrayName)
+    public static bool IsArrayStart(string text, out ArrayMarker marker)
     {
+        marker = null!;
         var m = ArrayStart().Match(text);
-        arrayName = m.Success ? m.Groups[1].Value : "";
-        return m.Success;
+        if (!m.Success)
+            return false;
+        marker = new ArrayMarker(
+            m.Groups[1].Value,
+            m.Groups[2].Success ? m.Groups[2].Value : null);
+        return true;
     }
 
-    public static bool IsArrayEnd(string text, out string arrayName)
+    public static bool IsArrayEnd(string text, out ArrayMarker marker)
     {
+        marker = null!;
         var m = ArrayEnd().Match(text);
-        arrayName = m.Success ? m.Groups[1].Value : "";
-        return m.Success;
+        if (!m.Success)
+            return false;
+        marker = new ArrayMarker(
+            m.Groups[1].Value,
+            m.Groups[2].Success ? m.Groups[2].Value : null);
+        return true;
     }
 
     /// <summary>
-    /// Parses loop field refs:
+    /// Parses classic loop field refs:
     ///   skills_i.category
     ///   skills_i.detail_i
     ///   skills_i.detail_i.name
@@ -92,10 +112,11 @@ internal static partial class PlaceholderPatterns
     }
 
     /// <summary>
-    /// ArrayStart/ArrayEnd name:
+    /// Classic ArrayStart/ArrayEnd source with _i parents:
     ///   skills              → parents=[], property=skills
     ///   skills_i.detail     → parents=[skills], property=detail
     ///   a_i.b_i.c           → parents=[a,b], property=c
+    /// Returns false for alias-qualified sources like skill.detail (no _i).
     /// </summary>
     public static bool TryParseQualifiedArrayName(
         string arrayStartName,
@@ -108,20 +129,20 @@ internal static partial class PlaceholderPatterns
         if (string.IsNullOrEmpty(s))
             return false;
 
-        // No parent qualification
-        if (!s.Contains("_i.", StringComparison.Ordinal))
+        // Plain identifier (no dots, no _i)
+        if (!s.Contains('.', StringComparison.Ordinal) && !s.Contains("_i", StringComparison.Ordinal))
         {
-            if (s.Contains("_i", StringComparison.Ordinal))
-                return false; // e.g. trailing skills_i alone is invalid as array name
             propertyName = s;
             return true;
         }
 
-        // Reuse loop ref parser: skills_i.detail → chain=[skills], field=detail
+        // Classic parent qualification requires _i.
+        if (!s.Contains("_i.", StringComparison.Ordinal))
+            return false;
+
         if (!TryParseLoopReference(s, out var reference) || string.IsNullOrEmpty(reference.FieldPath))
             return false;
 
-        // fieldPath must be a single identifier (the child array property), not a.b
         if (reference.FieldPath.Contains('.'))
             return false;
 
@@ -129,6 +150,37 @@ internal static partial class PlaceholderPatterns
         propertyName = reference.FieldPath;
         return true;
     }
+
+    /// <summary>
+    /// Alias-qualified nested source: skill.detail → parentAlias=skill, property=detail
+    /// </summary>
+    public static bool TryParseAliasQualifiedSource(
+        string source,
+        out string parentAlias,
+        out string propertyName)
+    {
+        parentAlias = "";
+        propertyName = "";
+        var s = source.Trim();
+        var dot = s.IndexOf('.');
+        if (dot <= 0 || dot >= s.Length - 1)
+            return false;
+        if (s.Contains("_i", StringComparison.Ordinal))
+            return false;
+
+        parentAlias = s[..dot];
+        propertyName = s[(dot + 1)..];
+        if (propertyName.Contains('.'))
+            return false;
+        if (!IsIdentifier(parentAlias) || !IsIdentifier(propertyName))
+            return false;
+        return true;
+    }
+
+    public static bool IsIdentifier(string value)
+        => value.Length > 0
+           && (char.IsLetter(value[0]) || value[0] == '_')
+           && value.All(c => char.IsLetterOrDigit(c) || c == '_');
 
     public static bool IsLoopField(string inner)
         => TryParseLoopReference(inner, out _);

@@ -11,8 +11,9 @@ public sealed class DocxTemplateEngine
 {
     private readonly JsonPathResolver _paths = new();
 
-    /// <param name="ArrayName">Local array property name (e.g. detail), used for stack matching.</param>
-    private sealed record LoopFrame(string ArrayName, JsonElement Item);
+    /// <param name="PropertyName">JSON array property (e.g. experience / detail).</param>
+    /// <param name="Alias">Optional iterate name from ArrayStart; use ${alias.field} instead of ${prop_i.field}.</param>
+    private sealed record LoopFrame(string PropertyName, string? Alias, JsonElement Item);
 
     public void Generate(string templatePath, string outputPath, JsonElement root, IssueCollector issues)
     {
@@ -67,7 +68,7 @@ public sealed class DocxTemplateEngine
         Stack<LoopFrame> loops,
         IssueCollector issues)
     {
-        while (TryFindLoop(container, out var startPara, out var endPara, out var arrayToken))
+        while (TryFindLoop(container, out var startPara, out var endPara, out var source))
         {
             var parent = startPara.Parent;
             if (parent is null || !ReferenceEquals(parent, endPara.Parent))
@@ -75,45 +76,48 @@ public sealed class DocxTemplateEngine
                 issues.Error(
                     "LoopParentMismatch",
                     "Docx",
-                    $"ArrayStart/ArrayEnd for '{arrayToken}' must share the same parent.",
-                    arrayToken);
+                    $"ArrayStart/ArrayEnd for '{source}' must share the same parent.",
+                    source);
                 ClearMarker(startPara);
                 continue;
             }
 
-            if (!TryResolveArrayItems(root, loops, arrayToken, out var localName, out var items, out var coerced, out var missing))
+            PlaceholderPatterns.IsArrayStart(RunTextMerger.GetParagraphText(startPara), out ArrayMarker marker);
+            var alias = marker.Alias;
+
+            if (!TryResolveArrayItems(root, loops, source, out var propertyName, out var items, out var coerced, out var missing))
             {
                 issues.Warning(
                     "MissingLoopArray",
                     "Docx",
-                    $"Cannot resolve array '{arrayToken}' from the current loop context — section left empty.",
-                    arrayToken);
+                    $"Cannot resolve array '{source}' from the current loop context — section left empty.",
+                    source);
                 items = Array.Empty<JsonElement>();
-                localName = arrayToken;
+                propertyName = source.Contains('.') ? source[(source.LastIndexOf('.') + 1)..] : source;
             }
             else if (missing)
             {
                 issues.Warning(
                     "MissingLoopArray",
                     "Docx",
-                    $"Array '{arrayToken}' missing — section left empty.",
-                    arrayToken);
+                    $"Array '{source}' missing — section left empty.",
+                    source);
             }
             else if (items.Count == 0)
             {
                 issues.Warning(
                     "EmptyLoopArray",
                     "Docx",
-                    $"Array '{arrayToken}' is empty — section left empty.",
-                    arrayToken);
+                    $"Array '{source}' is empty — section left empty.",
+                    source);
             }
             else if (coerced)
             {
                 issues.Info(
                     "LoopObjectCoerced",
                     "Docx",
-                    $"Array '{arrayToken}' was an object; coerced to a single-item array.",
-                    arrayToken);
+                    $"Array '{source}' was an object; coerced to a single-item array.",
+                    source);
             }
 
             var block = startPara.ElementsAfter().TakeWhile(e => !ReferenceEquals(e, endPara)).ToList();
@@ -126,7 +130,7 @@ public sealed class DocxTemplateEngine
                     temp.AppendChild(el.CloneNode(true));
 
                 var childLoops = CloneLoopStack(loops);
-                childLoops.Push(new LoopFrame(localName, item));
+                childLoops.Push(new LoopFrame(propertyName, alias, item));
                 ProcessContainer(temp, part, root, childLoops, issues);
 
                 while (temp.ChildElements.Count > 0)
@@ -148,34 +152,41 @@ public sealed class DocxTemplateEngine
     private bool TryResolveArrayItems(
         JsonElement root,
         Stack<LoopFrame> loops,
-        string arrayToken,
-        out string localName,
+        string source,
+        out string propertyName,
         out IReadOnlyList<JsonElement> items,
         out bool coerced,
         out bool missing)
     {
-        localName = arrayToken;
+        propertyName = source;
         items = Array.Empty<JsonElement>();
         coerced = false;
         missing = true;
 
-        if (!PlaceholderPatterns.TryParseQualifiedArrayName(arrayToken, out var parentChain, out var propertyName))
-            return false;
-
-        localName = propertyName;
-        JsonElement owner;
-
-        if (parentChain.Count == 0)
+        // Classic: skills / skills_i.detail
+        if (PlaceholderPatterns.TryParseQualifiedArrayName(source, out var parentChain, out propertyName))
         {
-            owner = ResolveDataContext(root, loops);
-        }
-        else if (!TryResolveFrameChain(loops, parentChain, out owner))
-        {
-            return false;
+            JsonElement owner;
+            if (parentChain.Count == 0)
+                owner = ResolveDataContext(root, loops);
+            else if (!TryResolveFrameChain(loops, parentChain, out owner))
+                return false;
+
+            items = _paths.GetArrayItems(owner, propertyName, out coerced, out missing);
+            return true;
         }
 
-        items = _paths.GetArrayItems(owner, propertyName, out coerced, out missing);
-        return true;
+        // Alias parent: skill.detail
+        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out propertyName))
+        {
+            if (!TryFindAliasFrame(loops, parentAlias, out var owner))
+                return false;
+
+            items = _paths.GetArrayItems(owner, propertyName, out coerced, out missing);
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryResolveFrameChain(
@@ -188,14 +199,12 @@ public sealed class DocxTemplateEngine
             return false;
 
         var frames = loops.Reverse().ToList(); // outer → inner
-        // Prefer the innermost contiguous match so `${experience_i.title}` still works
-        // inside a nested `${ArrayStart highlights}` / `${ArrayStart skills_i.detail}` block.
         for (var start = frames.Count - chain.Count; start >= 0; start--)
         {
             var matched = true;
             for (var i = 0; i < chain.Count; i++)
             {
-                if (!frames[start + i].ArrayName.Equals(chain[i], StringComparison.OrdinalIgnoreCase))
+                if (!frames[start + i].PropertyName.Equals(chain[i], StringComparison.OrdinalIgnoreCase))
                 {
                     matched = false;
                     break;
@@ -212,25 +221,87 @@ public sealed class DocxTemplateEngine
         return false;
     }
 
+    private static bool TryFindAliasFrame(
+        Stack<LoopFrame> loops,
+        string alias,
+        out JsonElement item)
+    {
+        item = default;
+        foreach (var frame in loops)
+        {
+            if (frame.Alias != null &&
+                frame.Alias.Equals(alias, StringComparison.OrdinalIgnoreCase))
+            {
+                item = frame.Item;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveAliasReference(
+        Stack<LoopFrame> loops,
+        string inner,
+        out JsonElement item,
+        out string? fieldPath)
+    {
+        item = default;
+        fieldPath = null;
+        var s = inner.Trim();
+        if (string.IsNullOrEmpty(s))
+            return false;
+
+        // Stack enumerates top→bottom (innermost first). Prefer longest alias at each level.
+        LoopFrame? best = null;
+        foreach (var frame in loops)
+        {
+            if (frame.Alias is null)
+                continue;
+
+            var alias = frame.Alias;
+            if (!(s.Equals(alias, StringComparison.OrdinalIgnoreCase) ||
+                  s.StartsWith(alias + ".", StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            if (best is null || alias.Length > best.Alias!.Length)
+                best = frame;
+        }
+
+        if (best?.Alias is null)
+            return false;
+
+        item = best.Item;
+        if (s.Equals(best.Alias, StringComparison.OrdinalIgnoreCase))
+        {
+            fieldPath = null;
+            return true;
+        }
+
+        fieldPath = s[(best.Alias.Length + 1)..];
+        return true;
+    }
+
     private static bool TryFindLoop(
         OpenXmlElement container,
         out Paragraph startPara,
         out Paragraph endPara,
-        out string arrayName)
+        out string source)
     {
         startPara = null!;
         endPara = null!;
-        arrayName = "";
+        source = "";
 
         foreach (var para in container.Descendants<Paragraph>())
         {
             var text = RunTextMerger.GetParagraphText(para);
-            if (!PlaceholderPatterns.IsArrayStart(text, out var name))
+            if (!PlaceholderPatterns.IsArrayStart(text, out ArrayMarker startMarker))
                 continue;
 
             if (para.Parent is null)
                 continue;
 
+            var name = startMarker.Source;
             var depth = 0;
             foreach (var sibling in para.ElementsAfter())
             {
@@ -238,21 +309,21 @@ public sealed class DocxTemplateEngine
                     continue;
 
                 var t = RunTextMerger.GetParagraphText(p);
-                if (PlaceholderPatterns.IsArrayStart(t, out var nested) &&
-                    nested.Equals(name, StringComparison.OrdinalIgnoreCase))
+                if (PlaceholderPatterns.IsArrayStart(t, out ArrayMarker nested) &&
+                    nested.Source.Equals(name, StringComparison.OrdinalIgnoreCase))
                 {
                     depth++;
                     continue;
                 }
 
-                if (PlaceholderPatterns.IsArrayEnd(t, out var endName) &&
-                    endName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                if (PlaceholderPatterns.IsArrayEnd(t, out ArrayMarker endMarker) &&
+                    endMarker.Source.Equals(name, StringComparison.OrdinalIgnoreCase))
                 {
                     if (depth == 0)
                     {
                         startPara = para;
                         endPara = p;
-                        arrayName = name;
+                        source = name;
                         return true;
                     }
 
@@ -277,7 +348,8 @@ public sealed class DocxTemplateEngine
             if (!text.Contains("${", StringComparison.Ordinal))
                 continue;
 
-            if (PlaceholderPatterns.IsArrayStart(text, out _) || PlaceholderPatterns.IsArrayEnd(text, out _))
+            if (PlaceholderPatterns.IsArrayStart(text, out ArrayMarker _) ||
+                PlaceholderPatterns.IsArrayEnd(text, out ArrayMarker _))
                 continue;
 
             RunTextMerger.ReplacePlaceholders(paragraph, part, inner =>
@@ -294,30 +366,11 @@ public sealed class DocxTemplateEngine
                         return string.Empty;
                     }
 
-                    if (string.IsNullOrEmpty(loopRef.FieldPath))
-                    {
-                        // Scalar array item (string/number/bool)
-                        return item.ValueKind switch
-                        {
-                            JsonValueKind.String => item.GetString() ?? "",
-                            JsonValueKind.Number => item.ToString(),
-                            JsonValueKind.True => "true",
-                            JsonValueKind.False => "false",
-                            JsonValueKind.Null => "",
-                            _ => item.ToString()
-                        };
-                    }
-
-                    if (_paths.TryResolveValue(item, loopRef.FieldPath, out var value))
-                        return value;
-
-                    issues.Warning(
-                        "UnresolvedPlaceholder",
-                        "Docx",
-                        $"Unresolved ${{{inner}}} — empty.",
-                        inner);
-                    return string.Empty;
+                    return FormatItemValue(item, loopRef.FieldPath, inner, issues);
                 }
+
+                if (TryResolveAliasReference(loops, inner, out var aliasItem, out var aliasField))
+                    return FormatItemValue(aliasItem, aliasField, inner, issues);
 
                 if (inner.StartsWith("ArrayStart", StringComparison.OrdinalIgnoreCase) ||
                     inner.StartsWith("ArrayEnd", StringComparison.OrdinalIgnoreCase))
@@ -345,6 +398,36 @@ public sealed class DocxTemplateEngine
                 return string.Empty;
             });
         }
+    }
+
+    private string FormatItemValue(
+        JsonElement item,
+        string? fieldPath,
+        string inner,
+        IssueCollector issues)
+    {
+        if (string.IsNullOrEmpty(fieldPath))
+        {
+            return item.ValueKind switch
+            {
+                JsonValueKind.String => item.GetString() ?? "",
+                JsonValueKind.Number => item.ToString(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Null => "",
+                _ => item.ToString()
+            };
+        }
+
+        if (_paths.TryResolveValue(item, fieldPath, out var value))
+            return value;
+
+        issues.Warning(
+            "UnresolvedPlaceholder",
+            "Docx",
+            $"Unresolved ${{{inner}}} — empty.",
+            inner);
+        return string.Empty;
     }
 
     private static JsonElement ResolveDataContext(JsonElement root, Stack<LoopFrame> loops)

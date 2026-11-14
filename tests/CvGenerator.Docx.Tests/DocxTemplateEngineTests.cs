@@ -134,6 +134,102 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void ArrayStart_with_iterate_alias_uses_alias_instead_of_name_i()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart experience exp}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${exp.title} at ${exp.company}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd experience}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "experience": [
+                {"title":"Eng","company":"A"},
+                {"title":"Lead","company":"B"}
+              ]
+            }
+            """);
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, new IssueCollector());
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Eng at A", text);
+            Assert.Contains("Lead at B", text);
+            Assert.DoesNotContain("exp.", text);
+            Assert.DoesNotContain("ArrayStart", text);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
+    public void Nested_ArrayStart_via_parent_alias()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skills skill}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${skill.category}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skill.detail d}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("- ${d.name}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skill.detail}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skill.tags tag}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("#${tag}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skill.tags}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skills}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "skills": [
+                {
+                  "category": "Backend",
+                  "detail": [ {"name":"C#"}, {"name":"SQL"} ],
+                  "tags": ["api", "dotnet"]
+                }
+              ]
+            }
+            """);
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, new IssueCollector());
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Backend", text);
+            Assert.Contains("- C#", text);
+            Assert.Contains("- SQL", text);
+            Assert.Contains("#api", text);
+            Assert.Contains("#dotnet", text);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
+    public void Scanner_rewrites_alias_fields_to_canonical_loop_paths()
+    {
+        var scanner = new PlaceholderScanner();
+        var found = scanner.ScanText(
+            "${ArrayStart experience exp} ${exp.title} ${ArrayEnd experience}");
+        Assert.Contains(found, p => p.Kind == "array-start" && p.JsonPath == "experience" && p.Alias == "exp");
+        Assert.Contains(found, p => p.Kind == "loop-field" && p.JsonPath == "experience_i.title");
+    }
+
+    [Fact]
     public void Parent_qualified_nested_ArrayStart_expands_object_and_scalar_items()
     {
         var template = CreateTempDocx(doc =>

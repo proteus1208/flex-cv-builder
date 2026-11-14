@@ -29,10 +29,11 @@ The output root is remembered in `%AppData%/CvGenerator/settings.json`.
 | Token | Meaning |
 | --- | --- |
 | `${name}` / `${linkedin}` | JSON field (dotted paths supported) |
-| `${ArrayStart experience}` … `${ArrayEnd experience}` | Repeat everything between (paragraphs, tables, images) for each array item |
-| `${experience_i.title}` | Field on the current loop item (`arrayname_i.field`) |
-| `${ArrayStart skills_i.detail}` … `${ArrayEnd skills_i.detail}` | Nested loop under the parent `skills` item (preferred naming) |
-| `${skills_i.detail_i.name}` / `${skills_i.detail_i}` | Nested item field, or the scalar value when the array holds strings |
+| `${ArrayStart experience}` … `${ArrayEnd experience}` | Repeat block for each array item |
+| `${experience_i.title}` | Field on the current item (`arrayname_i.field`) |
+| `${ArrayStart experience exp}` … `${exp.title}` | Same loop with an **iterate alias** — use `${exp.field}` instead of `${experience_i.field}` |
+| `${ArrayStart skill.detail d}` … `${d.name}` | Nested loop via parent alias |
+| `${ArrayStart skills_i.detail}` … `${skills_i.detail_i.name}` | Nested loop (classic parent-qualified `_i` form) |
 
 Nested loops are supported. Prefer **parent-qualified** names (`skills_i.detail`) so nested starts match your JSON clearly; relative names (`${ArrayStart detail}` inside a skills loop) still work. Template styles (font, color, alignment, borders) are preserved; only placeholder text is replaced.
 

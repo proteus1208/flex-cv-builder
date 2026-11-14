@@ -253,11 +253,20 @@
         var token = System.Net.WebUtility.HtmlEncode(p.Token);
         return p.Kind switch
         {
-            "array-start" => $"<span class=\"ph-brace\">$</span><span class=\"ph-brace\">{{</span><span class=\"ph-keyword\">ArrayStart</span> <span class=\"ph-var\">{System.Net.WebUtility.HtmlEncode(p.JsonPath ?? "")}</span><span class=\"ph-brace\">}}</span>",
-            "array-end" => $"<span class=\"ph-brace\">$</span><span class=\"ph-brace\">{{</span><span class=\"ph-keyword\">ArrayEnd</span> <span class=\"ph-var\">{System.Net.WebUtility.HtmlEncode(p.JsonPath ?? "")}</span><span class=\"ph-brace\">}}</span>",
+            "array-start" => FormatArrayMarkerHtml("ArrayStart", p),
+            "array-end" => FormatArrayMarkerHtml("ArrayEnd", p),
             "loop-field" => ColorizeSimpleToken(token),
             _ => ColorizeSimpleToken(token)
         };
+    }
+
+    private static string FormatArrayMarkerHtml(string keyword, CvGenerator.Docx.Services.PlaceholderInfo p)
+    {
+        var source = System.Net.WebUtility.HtmlEncode(p.JsonPath ?? "");
+        var alias = string.IsNullOrEmpty(p.Alias)
+            ? ""
+            : $" <span class=\"ph-var\">{System.Net.WebUtility.HtmlEncode(p.Alias)}</span>";
+        return $"<span class=\"ph-brace\">$</span><span class=\"ph-brace\">{{</span><span class=\"ph-keyword\">{keyword}</span> <span class=\"ph-var\">{source}</span>{alias}<span class=\"ph-brace\">}}</span>";
     }
 
     private static string ColorizeSimpleToken(string encodedToken)

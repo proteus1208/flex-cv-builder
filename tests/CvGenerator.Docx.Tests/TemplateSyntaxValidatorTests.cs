@@ -51,4 +51,18 @@ public class TemplateSyntaxValidatorTests
         Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
         Assert.DoesNotContain(issues, i => i.Code == "OrphanLoopField");
     }
+
+    [Fact]
+    public void Accepts_iterate_alias_syntax()
+    {
+        var issues = _sut.ValidateText("""
+            ${ArrayStart experience exp}
+            ${exp.title}
+            ${ArrayStart exp.highlights h}
+            ${h.text}
+            ${ArrayEnd exp.highlights}
+            ${ArrayEnd experience}
+            """);
+        Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
+    }
 }

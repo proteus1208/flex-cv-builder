@@ -8,6 +8,8 @@ public sealed class PlaceholderInfo
     public required string Token { get; init; }
     public required string Kind { get; init; } // simple | array-start | array-end | loop-field
     public string? JsonPath { get; init; }
+    /// <summary>Iterate alias from ${ArrayStart source alias}, when present.</summary>
+    public string? Alias { get; init; }
 }
 
 public sealed class PlaceholderScanner
@@ -22,8 +24,24 @@ public sealed class PlaceholderScanner
     {
         var results = new List<PlaceholderInfo>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var aliasToCanonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (System.Text.RegularExpressions.Match m in PlaceholderPatterns.AnyPlaceholder().Matches(text ?? ""))
+        var matches = PlaceholderPatterns.AnyPlaceholder().Matches(text ?? "").Cast<System.Text.RegularExpressions.Match>().ToList();
+
+        // Pass 1: collect ArrayStart aliases → canonical _i prefixes for live validation.
+        foreach (var m in matches)
+        {
+            var raw = m.Value;
+            if (!PlaceholderPatterns.IsArrayStart(raw, out ArrayMarker marker) || marker.Alias is null)
+                continue;
+
+            var canonical = ToCanonicalPrefix(marker.Source, aliasToCanonical);
+            if (canonical != null)
+                aliasToCanonical[marker.Alias] = canonical;
+        }
+
+        // Pass 2: classify placeholders.
+        foreach (var m in matches)
         {
             var raw = m.Value;
             if (!seen.Add(raw))
@@ -31,17 +49,27 @@ public sealed class PlaceholderScanner
 
             var inner = m.Groups[1].Value.Trim();
 
-            if (PlaceholderPatterns.ArrayStart().IsMatch(raw))
+            if (PlaceholderPatterns.IsArrayStart(raw, out ArrayMarker start))
             {
-                var name = PlaceholderPatterns.ArrayStart().Match(raw).Groups[1].Value;
-                results.Add(new PlaceholderInfo { Token = raw, Kind = "array-start", JsonPath = name });
+                results.Add(new PlaceholderInfo
+                {
+                    Token = raw,
+                    Kind = "array-start",
+                    JsonPath = start.Source,
+                    Alias = start.Alias
+                });
                 continue;
             }
 
-            if (PlaceholderPatterns.ArrayEnd().IsMatch(raw))
+            if (PlaceholderPatterns.IsArrayEnd(raw, out ArrayMarker end))
             {
-                var name = PlaceholderPatterns.ArrayEnd().Match(raw).Groups[1].Value;
-                results.Add(new PlaceholderInfo { Token = raw, Kind = "array-end", JsonPath = name });
+                results.Add(new PlaceholderInfo
+                {
+                    Token = raw,
+                    Kind = "array-end",
+                    JsonPath = end.Source,
+                    Alias = end.Alias
+                });
                 continue;
             }
 
@@ -56,6 +84,17 @@ public sealed class PlaceholderScanner
                 continue;
             }
 
+            if (TryRewriteAliasPath(inner, aliasToCanonical, out var canonicalPath))
+            {
+                results.Add(new PlaceholderInfo
+                {
+                    Token = raw,
+                    Kind = "loop-field",
+                    JsonPath = canonicalPath
+                });
+                continue;
+            }
+
             results.Add(new PlaceholderInfo
             {
                 Token = raw,
@@ -65,6 +104,60 @@ public sealed class PlaceholderScanner
         }
 
         return results;
+    }
+
+    private static string? ToCanonicalPrefix(
+        string source,
+        IReadOnlyDictionary<string, string> aliasToCanonical)
+    {
+        if (PlaceholderPatterns.TryParseQualifiedArrayName(source, out var parents, out var prop))
+        {
+            if (parents.Count == 0)
+                return prop + "_i";
+
+            return string.Join(".", parents.Select(p => p + "_i")) + "." + prop + "_i";
+        }
+
+        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var child) &&
+            aliasToCanonical.TryGetValue(parentAlias, out var parentPrefix))
+        {
+            return parentPrefix + "." + child + "_i";
+        }
+
+        return null;
+    }
+
+    private static bool TryRewriteAliasPath(
+        string inner,
+        IReadOnlyDictionary<string, string> aliasToCanonical,
+        out string canonical)
+    {
+        canonical = "";
+        var s = inner.Trim();
+
+        string? bestAlias = null;
+        foreach (var alias in aliasToCanonical.Keys)
+        {
+            if (s.Equals(alias, StringComparison.OrdinalIgnoreCase) ||
+                s.StartsWith(alias + ".", StringComparison.OrdinalIgnoreCase))
+            {
+                if (bestAlias is null || alias.Length > bestAlias.Length)
+                    bestAlias = alias;
+            }
+        }
+
+        if (bestAlias is null)
+            return false;
+
+        var prefix = aliasToCanonical[bestAlias];
+        if (s.Equals(bestAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            canonical = prefix;
+            return true;
+        }
+
+        canonical = prefix + "." + s[(bestAlias.Length + 1)..];
+        return true;
     }
 
     private static string ExtractAllText(WordprocessingDocument doc)

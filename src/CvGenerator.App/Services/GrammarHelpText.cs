@@ -35,9 +35,14 @@ Notes:
 
 2) Arrays (loops)
 -----------------
-Template:
+Classic (_i form):
   ${ArrayStart experience}
   ${experience_i.title} — ${experience_i.company}
+  ${ArrayEnd experience}
+
+With iterate alias (recommended):
+  ${ArrayStart experience exp}
+  ${exp.title} — ${exp.company}
   ${ArrayEnd experience}
 
 JSON:
@@ -49,23 +54,31 @@ JSON:
   }
 
 Notes:
-  - ArrayStart / ArrayEnd names must match exactly.
-  - Inside the loop, use arrayname_i.field (example: experience_i.title).
-  - Everything between the markers (paragraphs, tables, images) is repeated
-    once per array item. Styles from the template are kept.
+  - ${ArrayStart varname iteratevarname} binds each item to iteratevarname.
+  - Then use ${iteratevarname.field} instead of ${varname_i.field}.
+  - ArrayEnd matches the array source (varname). Alias on End is optional.
+  - Everything between the markers is repeated per item; styles are kept.
 
 
-3) Nested arrays (preferred: parent-qualified)
-----------------------------------------------
-Template:
+3) Nested arrays
+----------------
+With aliases:
+  ${ArrayStart skills skill}
+  ${skill.category}
+  ${ArrayStart skill.detail d}
+  - ${d.name} (${d.level})
+  ${ArrayEnd skill.detail}
+  ${ArrayStart skill.tags tag}
+  #${tag}
+  ${ArrayEnd skill.tags}
+  ${ArrayEnd skills}
+
+Classic (_i) still works:
   ${ArrayStart skills}
   ${skills_i.category}
   ${ArrayStart skills_i.detail}
-  - ${skills_i.detail_i.name} (${skills_i.detail_i.level})
+  - ${skills_i.detail_i.name}
   ${ArrayEnd skills_i.detail}
-  ${ArrayStart skills_i.tags}
-  #${skills_i.tags_i}
-  ${ArrayEnd skills_i.tags}
   ${ArrayEnd skills}
 
 JSON:
@@ -82,9 +95,9 @@ JSON:
   }
 
 Notes:
-  - Prefer ${ArrayStart skills_i.detail} so the parent is obvious.
-  - Relative names still work: ${ArrayStart detail} inside a skills loop.
-  - For string arrays, use ${skills_i.tags_i} with no field after _i.
+  - Nested start can use the parent alias: ${ArrayStart skill.detail d}
+  - Or classic parent-qualified: ${ArrayStart skills_i.detail}
+  - Scalar string items: ${tag} or ${skills_i.tags_i}
 
 
 4) Rich text inside JSON string values
@@ -129,12 +142,14 @@ Artifacts written there:
 6) Quick cheat sheet
 --------------------
   ${path}                         root / dotted field
-  ${ArrayStart name}              begin loop
+  ${ArrayStart name}              begin loop (classic)
+  ${ArrayStart name alias}        begin loop with iterate alias
   ${ArrayEnd name}                end loop
-  ${name_i.field}                 field on loop item
-  ${parent_i.child}               nested ArrayStart name
-  ${parent_i.child_i.field}       nested item field
-  ${parent_i.child_i}             nested scalar item
+  ${name_i.field}                 classic field on loop item
+  ${alias.field}                  field via iterate alias
+  ${alias}                        scalar item via alias
+  ${parent_i.child}               nested ArrayStart (classic)
+  ${alias.child}                  nested ArrayStart via parent alias
   **text**  *text*  __text__      bold / italic / underline
   [label](url)                    hyperlink
 """;
