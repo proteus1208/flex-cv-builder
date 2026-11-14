@@ -21,10 +21,10 @@ main.Document = new Document(new Body(
     new Paragraph(new Run(new Text("${linkedin}"))),
     new Paragraph(new Run(new Text("${summary}"))),
     new Paragraph(new Run(new Text("Experience"))),
-    new Paragraph(new Run(new Text("${ start experience}"))),
-    new Paragraph(new Run(new Text("${experience.i.title} — ${experience.i.company} (${experience.i.years})"))),
-    new Paragraph(new Run(new Text("${experience.i.description}"))),
-    new Paragraph(new Run(new Text("${ end experience}")))
+    new Paragraph(new Run(new Text("${ArrayStart experience}"))),
+    new Paragraph(new Run(new Text("${experience_i.title} — ${experience_i.company} (${experience_i.years})"))),
+    new Paragraph(new Run(new Text("${experience_i.description}"))),
+    new Paragraph(new Run(new Text("${ArrayEnd experience}")))
 ));
 main.Document.Save();
 Console.WriteLine("Wrote " + outPath);

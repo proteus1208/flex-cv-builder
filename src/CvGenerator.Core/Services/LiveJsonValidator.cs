@@ -1,7 +1,5 @@
 using System.Net;
-using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using CvGenerator.Core.Models;
 
 namespace CvGenerator.Core.Services;
@@ -31,18 +29,14 @@ public sealed class LiveJsonValidator
         var marks = new List<JsonMark>();
         var placeholderList = placeholders.ToList();
 
+        // Always build a highlight mirror of the raw JSON so the editor is correct on first paint.
         if (string.IsNullOrWhiteSpace(jsonText))
         {
             issues.Error("InvalidJson", "ParseJson", "JSON is empty.");
-            return new LiveValidationResult
-            {
-                Issues = issues.Issues.ToList(),
-                HighlightHtml = "",
-                Marks = marks
-            };
+            return Result(issues, marks, "");
         }
 
-        JsonDocument? doc = null;
+        JsonDocument doc;
         try
         {
             doc = JsonDocument.Parse(jsonText);
@@ -50,12 +44,7 @@ public sealed class LiveJsonValidator
         catch (JsonException ex)
         {
             issues.Error("InvalidJson", "ParseJson", $"Invalid JSON: {ex.Message}", detail: ex.ToString());
-            return new LiveValidationResult
-            {
-                Issues = issues.Issues.ToList(),
-                HighlightHtml = BuildHighlight(jsonText, marks),
-                Marks = marks
-            };
+            return Result(issues, marks, BuildPlainHighlight(jsonText));
         }
 
         using (doc)
@@ -67,79 +56,42 @@ public sealed class LiveJsonValidator
                 if (string.IsNullOrWhiteSpace(p.JsonPath))
                     continue;
 
-                if (p.Kind == "simple")
+                switch (p.Kind)
                 {
-                    if (!_paths.TryGetElement(root, p.JsonPath, out var el))
-                    {
-                        issues.Warning("MissingField", "ResolvePaths", $"Missing JSON field for {p.Token}.", p.JsonPath);
-                        marks.Add(new JsonMark(p.JsonPath, IssueSeverity.Warning, "missing"));
-                    }
-                    else if (IsEmpty(el))
-                    {
-                        issues.Warning("EmptyField", "ResolvePaths", $"JSON field '{p.JsonPath}' is empty.", p.JsonPath);
-                        marks.Add(new JsonMark(p.JsonPath, IssueSeverity.Warning, "empty"));
-                    }
-                }
-                else if (p.Kind == "loop-start")
-                {
-                    var items = _paths.GetArrayItems(root, p.JsonPath, out _, out var missing);
-                    if (missing)
-                    {
-                        issues.Warning(
-                            "MissingLoopArray",
-                            "ResolvePaths",
-                            $"Loop array '{p.JsonPath}' is missing — output will be empty for that section.",
-                            p.JsonPath);
-                        marks.Add(new JsonMark(p.JsonPath, IssueSeverity.Warning, "missing"));
-                    }
-                    else if (items.Count == 0)
-                    {
-                        issues.Warning(
-                            "EmptyLoopArray",
-                            "ResolvePaths",
-                            $"Loop array '{p.JsonPath}' is empty — output will be empty for that section.",
-                            p.JsonPath);
-                        marks.Add(new JsonMark(p.JsonPath, IssueSeverity.Warning, "empty"));
-                    }
-                }
-                else if (p.Kind == "loop-field")
-                {
-                    // path like experience.i.title → check experience exists; field presence checked per item lightly
-                    var idx = p.JsonPath.IndexOf(".i.", StringComparison.Ordinal);
-                    if (idx <= 0)
-                        continue;
-                    var arrayPath = p.JsonPath[..idx];
-                    var field = p.JsonPath[(idx + 3)..];
-                    var items = _paths.GetArrayItems(root, arrayPath, out _, out var missing);
-                    if (missing || items.Count == 0)
-                        continue;
-
-                    for (var i = 0; i < items.Count; i++)
-                    {
-                        if (!_paths.TryGetElement(items[i], field, out var el) || IsEmpty(el))
+                    case "simple":
+                        if (!_paths.TryGetElement(root, p.JsonPath, out var el))
                         {
-                            var markPath = $"{arrayPath}[{i}].{field}";
-                            issues.Warning(
-                                "MissingLoopField",
-                                "ResolvePaths",
-                                $"Missing/empty '{field}' in {arrayPath}[{i}].",
-                                markPath);
-                            marks.Add(new JsonMark(field, IssueSeverity.Warning, "empty"));
+                            issues.Warning("MissingField", "ResolvePaths",
+                                $"Template expects '{p.JsonPath}' ({p.Token}) but JSON has no matching key.",
+                                p.JsonPath);
+                            marks.Add(new JsonMark(p.JsonPath, IssueSeverity.Warning, "missing"));
                         }
-                    }
+                        else if (IsEmpty(el))
+                        {
+                            issues.Warning("EmptyField", "ResolvePaths",
+                                $"JSON field '{p.JsonPath}' is empty.", p.JsonPath);
+                            marks.Add(new JsonMark(p.JsonPath, IssueSeverity.Warning, "empty"));
+                        }
+                        break;
+
+                    case "array-start":
+                    case "loop-start":
+                        ValidateArray(root, p.JsonPath, p.Token, issues, marks);
+                        break;
+
+                    case "loop-field":
+                        ValidateLoopField(root, p.JsonPath, p.Token, issues, marks);
+                        break;
                 }
             }
 
-            // Folder fields soft warnings
             foreach (var required in new[] { "name", "role", "topSkills" })
             {
                 if (!_paths.TryGetElement(root, required, out var el) || IsEmpty(el))
                 {
                     if (marks.All(m => !m.Path.Equals(required, StringComparison.OrdinalIgnoreCase)))
                     {
-                        issues.Warning(
-                            "MissingFolderField",
-                            "Folder",
+                        issues.Warning("MissingFolderField", "Folder",
                             $"Recommended field '{required}' missing/empty for output folder naming.",
                             required);
                         marks.Add(new JsonMark(required, IssueSeverity.Warning, "missing"));
@@ -148,55 +100,120 @@ public sealed class LiveJsonValidator
             }
         }
 
+        var uniqueMarks = marks
+            .GroupBy(m => m.Path + "|" + m.Reason, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
         return new LiveValidationResult
         {
             Issues = issues.Issues.ToList(),
-            HighlightHtml = BuildHighlight(jsonText, marks),
-            Marks = marks
-                .GroupBy(m => m.Path + m.Reason)
-                .Select(g => g.First())
-                .ToList()
+            HighlightHtml = BuildHighlight(jsonText, uniqueMarks),
+            Marks = uniqueMarks
         };
     }
+
+    private void ValidateArray(
+        JsonElement root,
+        string arrayPath,
+        string token,
+        IssueCollector issues,
+        List<JsonMark> marks)
+    {
+        var items = _paths.GetArrayItems(root, arrayPath, out _, out var missing);
+        if (missing)
+        {
+            issues.Warning("MissingLoopArray", "ResolvePaths",
+                $"Template array '{arrayPath}' ({token}) not found in JSON — section will be empty.",
+                arrayPath);
+            marks.Add(new JsonMark(arrayPath, IssueSeverity.Warning, "missing"));
+        }
+        else if (items.Count == 0)
+        {
+            issues.Warning("EmptyLoopArray", "ResolvePaths",
+                $"JSON array '{arrayPath}' is empty — section will be empty.",
+                arrayPath);
+            marks.Add(new JsonMark(arrayPath, IssueSeverity.Warning, "empty"));
+        }
+    }
+
+    private void ValidateLoopField(
+        JsonElement root,
+        string jsonPath,
+        string token,
+        IssueCollector issues,
+        List<JsonMark> marks)
+    {
+        // experience_i.title
+        var idx = jsonPath.IndexOf("_i.", StringComparison.Ordinal);
+        if (idx <= 0)
+            return;
+
+        var arrayPath = jsonPath[..idx];
+        var field = jsonPath[(idx + 3)..];
+        var items = _paths.GetArrayItems(root, arrayPath, out _, out var missing);
+        if (missing)
+        {
+            issues.Warning("MissingLoopArray", "ResolvePaths",
+                $"Template field {token} needs array '{arrayPath}' which is missing in JSON.",
+                arrayPath);
+            marks.Add(new JsonMark(arrayPath, IssueSeverity.Warning, "missing"));
+            return;
+        }
+
+        if (items.Count == 0)
+            return;
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (!_paths.TryGetElement(items[i], field, out var el) || IsEmpty(el))
+            {
+                var markPath = $"{arrayPath}[{i}].{field}";
+                issues.Warning("MissingLoopField", "ResolvePaths",
+                    $"Missing/empty '{field}' in {arrayPath}[{i}] for {token}.",
+                    markPath);
+                // Do NOT mark bare leaf "field" — that wrongly highlights other keys.
+                marks.Add(new JsonMark(markPath, IssueSeverity.Warning, "empty"));
+            }
+        }
+    }
+
+    private static LiveValidationResult Result(
+        IssueCollector issues,
+        List<JsonMark> marks,
+        string html) => new()
+    {
+        Issues = issues.Issues.ToList(),
+        HighlightHtml = html,
+        Marks = marks
+    };
 
     private static bool IsEmpty(JsonElement el) =>
         el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
         || (el.ValueKind == JsonValueKind.String && string.IsNullOrWhiteSpace(el.GetString()))
         || (el.ValueKind == JsonValueKind.Array && !el.EnumerateArray().Any());
 
+    private static string BuildPlainHighlight(string jsonText)
+        => WebUtility.HtmlEncode(jsonText);
+
     private static string BuildHighlight(string jsonText, IReadOnlyList<JsonMark> marks)
     {
-        if (string.IsNullOrEmpty(jsonText))
-            return "";
-
-        var severityByLeaf = new Dictionary<string, IssueSeverity>(StringComparer.OrdinalIgnoreCase);
-        foreach (var mark in marks)
-        {
-            var leaf = mark.Path;
-            var bracket = leaf.LastIndexOf(']');
-            if (bracket >= 0 && bracket + 2 < leaf.Length && leaf[bracket + 1] == '.')
-                leaf = leaf[(bracket + 2)..];
-            else if (leaf.Contains('.'))
-                leaf = leaf[(leaf.LastIndexOf('.') + 1)..];
-
-            if (!severityByLeaf.TryGetValue(leaf, out var existing) || mark.Severity > existing)
-                severityByLeaf[leaf] = mark.Severity;
-        }
-
-        // Escape then wrap "leaf" property names.
+        // Mirror exact text (no <br/>) so first paint matches the textarea with white-space:pre-wrap.
         var escaped = WebUtility.HtmlEncode(jsonText);
-        foreach (var (leaf, severity) in severityByLeaf.OrderByDescending(k => k.Key.Length))
+
+        // Only highlight keys that physically exist in JSON and are empty (top-level or dotted last segment once).
+        foreach (var mark in marks.Where(m => m.Reason == "empty" && !m.Path.Contains('[')))
         {
-            var cls = severity == IssueSeverity.Error ? "json-mark error" : "json-mark warn";
-            var pattern = $"&quot;{Regex.Escape(leaf)}&quot;";
-            escaped = Regex.Replace(
-                escaped,
-                pattern,
-                $"<span class=\"{cls}\">&quot;{WebUtility.HtmlEncode(leaf)}&quot;</span>",
-                RegexOptions.IgnoreCase);
+            var leaf = mark.Path.Contains('.') ? mark.Path[(mark.Path.LastIndexOf('.') + 1)..] : mark.Path;
+            var needle = $"&quot;{WebUtility.HtmlEncode(leaf)}&quot;";
+            var styled =
+                $"<span class=\"json-mark warn\">&quot;{WebUtility.HtmlEncode(leaf)}&quot;</span>";
+            // Replace first occurrence only to reduce collateral highlights.
+            var idx = escaped.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+                escaped = escaped[..idx] + styled + escaped[(idx + needle.Length)..];
         }
 
-        // Preserve trailing newline for textarea sync.
-        return escaped.Replace("\n", "<br/>");
+        return escaped;
     }
 }

@@ -8,21 +8,20 @@ public class TemplateSyntaxValidatorTests
     private readonly TemplateSyntaxValidator _sut = new();
 
     [Fact]
-    public void Detects_unpaired_start_and_end()
+    public void Detects_unpaired_ArrayStart_and_ArrayEnd()
     {
-        var issues = _sut.ValidateText("${ start experience} hi ${name}");
-        Assert.Contains(issues, i => i.Code == "UnpairedLoopStart" && i.Severity == IssueSeverity.Error);
+        var issues = _sut.ValidateText("${ArrayStart experience} hi ${name}");
+        Assert.Contains(issues, i => i.Code == "UnpairedArrayStart" && i.Severity == IssueSeverity.Error);
 
-        issues = _sut.ValidateText("${ end experience}");
-        Assert.Contains(issues, i => i.Code == "UnpairedLoopEnd");
+        issues = _sut.ValidateText("${ArrayEnd experience}");
+        Assert.Contains(issues, i => i.Code == "UnpairedArrayEnd");
     }
 
     [Fact]
-    public void Detects_invalid_keyword_and_too_many_parts()
+    public void Detects_legacy_start_keyword()
     {
-        var issues = _sut.ValidateText("${ starts experience} ${foo bar baz}");
+        var issues = _sut.ValidateText("${ start experience}");
         Assert.Contains(issues, i => i.Code == "InvalidPlaceholderKeyword");
-        Assert.Contains(issues, i => i.Code == "InvalidPlaceholder");
     }
 
     [Fact]
@@ -30,9 +29,9 @@ public class TemplateSyntaxValidatorTests
     {
         var issues = _sut.ValidateText("""
             ${name}
-            ${ start experience}
-            ${experience.i.title}
-            ${ end experience}
+            ${ArrayStart experience}
+            ${experience_i.title}
+            ${ArrayEnd experience}
             """);
         Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
     }

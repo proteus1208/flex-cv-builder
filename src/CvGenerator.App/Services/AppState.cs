@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net;
 using System.Text.Json;
 using CvGenerator.Core.Models;
 using CvGenerator.Core.Services;
@@ -8,7 +9,7 @@ using Microsoft.Win32;
 
 namespace CvGenerator.App.Services;
 
-public sealed class AppState
+public sealed class AppState : IDisposable
 {
     private readonly CvJsonService _json;
     private readonly OutputFolderService _folders;
@@ -21,6 +22,9 @@ public sealed class AppState
     private SettingsStore _settingsStore = null!;
     private AppSettings _settings = null!;
     private IReadOnlyList<GenerationIssue> _templateIssues = Array.Empty<GenerationIssue>();
+    private FileSystemWatcher? _templateWatcher;
+    private readonly object _watchLock = new();
+    private DateTime _lastWatchReload = DateTime.MinValue;
 
     public AppState(
         CvJsonService json,
@@ -48,7 +52,7 @@ public sealed class AppState
     public string? SelectedTemplateId { get; set; }
     public IReadOnlyList<PlaceholderInfo> Placeholders { get; private set; } = Array.Empty<PlaceholderInfo>();
     public string OutputPreview { get; private set; } = "";
-    public string JsonHighlightHtml { get; private set; } = "";
+    public string JsonHighlightHtml { get; private set; } = WebUtility.HtmlEncode(SampleJson);
     public IReadOnlyList<JsonMark> JsonMarks { get; private set; } = Array.Empty<JsonMark>();
     public IReadOnlyList<GenerationIssue> Issues { get; private set; } = Array.Empty<GenerationIssue>();
     public GenerationStatus Status { get; private set; } = GenerationStatus.Ready;
@@ -67,7 +71,82 @@ public sealed class AppState
         RefreshLibreOfficeStatus();
         RefreshTemplates();
         RefreshPreviewAndLiveValidation();
+        StartTemplateWatcher();
         Notify();
+    }
+
+    public void Dispose()
+    {
+        StopTemplateWatcher();
+    }
+
+    private void StartTemplateWatcher()
+    {
+        StopTemplateWatcher();
+        if (string.IsNullOrWhiteSpace(TemplatesRoot) || !Directory.Exists(TemplatesRoot))
+            return;
+
+        try
+        {
+            _templateWatcher = new FileSystemWatcher(TemplatesRoot)
+            {
+                Filter = "*.docx",
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.Size
+            };
+            _templateWatcher.Changed += OnTemplateFileChanged;
+            _templateWatcher.Created += OnTemplateFileChanged;
+            _templateWatcher.Deleted += OnTemplateFileChanged;
+            _templateWatcher.Renamed += OnTemplateFileRenamed;
+            _templateWatcher.EnableRaisingEvents = true;
+        }
+        catch
+        {
+            StopTemplateWatcher();
+        }
+    }
+
+    private void StopTemplateWatcher()
+    {
+        if (_templateWatcher is null)
+            return;
+        _templateWatcher.EnableRaisingEvents = false;
+        _templateWatcher.Changed -= OnTemplateFileChanged;
+        _templateWatcher.Created -= OnTemplateFileChanged;
+        _templateWatcher.Deleted -= OnTemplateFileChanged;
+        _templateWatcher.Renamed -= OnTemplateFileRenamed;
+        _templateWatcher.Dispose();
+        _templateWatcher = null;
+    }
+
+    private void OnTemplateFileRenamed(object sender, RenamedEventArgs e) => ReloadFromWatcher();
+
+    private void OnTemplateFileChanged(object sender, FileSystemEventArgs e) => ReloadFromWatcher();
+
+    private void ReloadFromWatcher()
+    {
+        lock (_watchLock)
+        {
+            // Debounce Word temp saves (~$ files + burst writes).
+            if ((DateTime.UtcNow - _lastWatchReload).TotalMilliseconds < 400)
+                return;
+            _lastWatchReload = DateTime.UtcNow;
+        }
+
+        try
+        {
+            // Slight delay so the file is fully written.
+            Task.Run(async () =>
+            {
+                await Task.Delay(350);
+                RefreshTemplates();
+                Notify();
+            });
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     public void RefreshLibreOfficeStatus()
@@ -372,6 +451,12 @@ public sealed class AppState
               "company": "Example Corp",
               "years": "2022-Present",
               "description": "Led resume tooling and document pipelines."
+            },
+            {
+              "title": "Engineer",
+              "company": "Prior Co",
+              "years": "2019-2022",
+              "description": "Built APIs and frontend features."
             }
           ]
         }

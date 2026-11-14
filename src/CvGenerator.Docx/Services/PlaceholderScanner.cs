@@ -1,32 +1,21 @@
-using System.Text.RegularExpressions;
+using CvGenerator.Docx.Internal;
 using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace CvGenerator.Docx.Services;
 
 public sealed class PlaceholderInfo
 {
     public required string Token { get; init; }
-    public required string Kind { get; init; } // simple | loop-start | loop-end | loop-field
+    public required string Kind { get; init; } // simple | array-start | array-end | loop-field
     public string? JsonPath { get; init; }
 }
 
-public sealed partial class PlaceholderScanner
+public sealed class PlaceholderScanner
 {
-    [GeneratedRegex(@"\$\{\s*start\s+([A-Za-z0-9_.]+)\s*\}", RegexOptions.IgnoreCase)]
-    private static partial Regex LoopStartRegex();
-
-    [GeneratedRegex(@"\$\{\s*end\s+([A-Za-z0-9_.]+)\s*\}", RegexOptions.IgnoreCase)]
-    private static partial Regex LoopEndRegex();
-
-    [GeneratedRegex(@"\$\{([^{}]+)\}")]
-    private static partial Regex AnyPlaceholderRegex();
-
     public IReadOnlyList<PlaceholderInfo> ScanFile(string docxPath)
     {
         using var doc = WordprocessingDocument.Open(docxPath, false);
-        var texts = ExtractAllText(doc);
-        return ScanText(texts);
+        return ScanText(ExtractAllText(doc));
     }
 
     public IReadOnlyList<PlaceholderInfo> ScanText(string text)
@@ -34,51 +23,46 @@ public sealed partial class PlaceholderScanner
         var results = new List<PlaceholderInfo>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (Match m in AnyPlaceholderRegex().Matches(text))
+        foreach (System.Text.RegularExpressions.Match m in PlaceholderPatterns.AnyPlaceholder().Matches(text ?? ""))
         {
             var raw = m.Value;
             if (!seen.Add(raw))
                 continue;
 
             var inner = m.Groups[1].Value.Trim();
-            if (LoopStartRegex().IsMatch(raw))
+
+            if (PlaceholderPatterns.IsArrayStart(raw, out var startName) ||
+                PlaceholderPatterns.ArrayStart().IsMatch(raw))
             {
-                var name = LoopStartRegex().Match(raw).Groups[1].Value;
-                results.Add(new PlaceholderInfo
-                {
-                    Token = raw,
-                    Kind = "loop-start",
-                    JsonPath = name
-                });
+                var name = PlaceholderPatterns.ArrayStart().Match(raw).Groups[1].Value;
+                results.Add(new PlaceholderInfo { Token = raw, Kind = "array-start", JsonPath = name });
+                continue;
             }
-            else if (LoopEndRegex().IsMatch(raw))
+
+            if (PlaceholderPatterns.ArrayEnd().IsMatch(raw))
             {
-                var name = LoopEndRegex().Match(raw).Groups[1].Value;
-                results.Add(new PlaceholderInfo
-                {
-                    Token = raw,
-                    Kind = "loop-end",
-                    JsonPath = name
-                });
+                var name = PlaceholderPatterns.ArrayEnd().Match(raw).Groups[1].Value;
+                results.Add(new PlaceholderInfo { Token = raw, Kind = "array-end", JsonPath = name });
+                continue;
             }
-            else if (inner.Contains(".i.", StringComparison.Ordinal))
+
+            if (PlaceholderPatterns.IsLoopField(inner, out var arrayName, out var field))
             {
                 results.Add(new PlaceholderInfo
                 {
                     Token = raw,
                     Kind = "loop-field",
-                    JsonPath = inner
+                    JsonPath = $"{arrayName}_i.{field}"
                 });
+                continue;
             }
-            else
+
+            results.Add(new PlaceholderInfo
             {
-                results.Add(new PlaceholderInfo
-                {
-                    Token = raw,
-                    Kind = "simple",
-                    JsonPath = inner
-                });
-            }
+                Token = raw,
+                Kind = "simple",
+                JsonPath = inner
+            });
         }
 
         return results;

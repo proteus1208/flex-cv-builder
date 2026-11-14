@@ -374,7 +374,13 @@ button, input, select, textarea {
 }
 
 .placeholder-item:last-child { border-bottom: none; }
-.placeholder-item span:first-child { color: var(--accent-deep); font-weight: 500; }
+
+.ph-token { font-weight: 500; }
+.ph-brace { color: #64748b; }
+.ph-keyword { color: #7c3aed; font-weight: 700; }
+.ph-var { color: #0e7c66; font-weight: 600; }
+
+.json-mark-bar .json-chip.warn { /* missing template↔json key */ }
 
 .muted { color: var(--muted); }
 

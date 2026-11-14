@@ -29,10 +29,12 @@ The output root is remembered in `%AppData%/CvGenerator/settings.json`.
 | Token | Meaning |
 | --- | --- |
 | `${name}` / `${linkedin}` | JSON field (dotted paths supported) |
-| `${ start experience}` … `${ end experience}` | Repeat block for each array item |
-| `${experience.i.title}` | Field on the current loop item |
+| `${ArrayStart experience}` … `${ArrayEnd experience}` | Repeat everything between (paragraphs, tables, images) for each array item |
+| `${experience_i.title}` | Field on the current loop item (`arrayname_i.field`) |
 
-Example JSON array:
+Nested loops are supported (ArrayStart/ArrayEnd inside another block). Template styles (font, color, alignment, borders) are preserved; only placeholder text is replaced.
+
+Example:
 
 ```json
 "experience": [
@@ -40,7 +42,11 @@ Example JSON array:
 ]
 ```
 
-A single object is coerced to a one-item array (logged as Info in the Debug Error List).
+```text
+${ArrayStart experience}
+${experience_i.title} — ${experience_i.company}
+${ArrayEnd experience}
+```
 
 ## Scripts
 

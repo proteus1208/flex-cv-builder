@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using CvGenerator.Core.Services;
 using CvGenerator.Docx.Internal;
 using DocumentFormat.OpenXml;
@@ -8,18 +7,11 @@ using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace CvGenerator.Docx.Services;
 
-public sealed partial class DocxTemplateEngine
+public sealed class DocxTemplateEngine
 {
     private readonly JsonPathResolver _paths = new();
 
-    [GeneratedRegex(@"\$\{\s*start\s+([A-Za-z0-9_.]+)\s*\}", RegexOptions.IgnoreCase)]
-    private static partial Regex LoopStartRegex();
-
-    [GeneratedRegex(@"\$\{\s*end\s+([A-Za-z0-9_.]+)\s*\}", RegexOptions.IgnoreCase)]
-    private static partial Regex LoopEndRegex();
-
-    [GeneratedRegex(@"\$\{([^{}]+)\}")]
-    private static partial Regex PlaceholderRegex();
+    private sealed record LoopFrame(string ArrayName, JsonElement Item);
 
     public void Generate(string templatePath, string outputPath, JsonElement root, IssueCollector issues)
     {
@@ -33,18 +25,19 @@ public sealed partial class DocxTemplateEngine
                 return;
             }
 
-            ProcessContainer(doc.MainDocumentPart.Document.Body, root, issues);
+            var stack = new Stack<LoopFrame>();
+            ProcessContainer(doc.MainDocumentPart.Document.Body, root, stack, issues);
 
             foreach (var header in doc.MainDocumentPart.HeaderParts)
             {
                 if (header.Header != null)
-                    ProcessContainer(header.Header, root, issues);
+                    ProcessContainer(header.Header, root, new Stack<LoopFrame>(), issues);
             }
 
             foreach (var footer in doc.MainDocumentPart.FooterParts)
             {
                 if (footer.Footer != null)
-                    ProcessContainer(footer.Footer, root, issues);
+                    ProcessContainer(footer.Footer, root, new Stack<LoopFrame>(), issues);
             }
 
             doc.MainDocumentPart.Document.Save();
@@ -55,85 +48,48 @@ public sealed partial class DocxTemplateEngine
         }
     }
 
-    private void ProcessContainer(OpenXmlElement container, JsonElement root, IssueCollector issues)
+    private void ProcessContainer(
+        OpenXmlElement container,
+        JsonElement root,
+        Stack<LoopFrame> loops,
+        IssueCollector issues)
     {
-        ExpandLoops(container, root, issues);
-        ReplaceSimplePlaceholders(container, root, issues);
+        ExpandLoops(container, root, loops, issues);
+        ReplacePlaceholders(container, root, loops, issues);
     }
 
-    private void ExpandLoops(OpenXmlElement container, JsonElement root, IssueCollector issues)
+    private void ExpandLoops(
+        OpenXmlElement container,
+        JsonElement root,
+        Stack<LoopFrame> loops,
+        IssueCollector issues)
     {
-        // Process from outermost by repeatedly finding start markers until none remain.
-        while (true)
+        // Expand one loop at a time (innermost-capable via recursive ProcessContainer on clones).
+        while (TryFindLoop(container, out var startPara, out var endPara, out var arrayName))
         {
-            var paragraphs = container.Descendants<Paragraph>().ToList();
-            int? startIndex = null;
-            string? arrayName = null;
-
-            for (var i = 0; i < paragraphs.Count; i++)
-            {
-                var text = RunTextMerger.GetParagraphText(paragraphs[i]);
-                var startMatch = LoopStartRegex().Match(text);
-                if (startMatch.Success)
-                {
-                    startIndex = i;
-                    arrayName = startMatch.Groups[1].Value;
-                    break;
-                }
-            }
-
-            if (startIndex is null || arrayName is null)
-                break;
-
-            var endIndex = -1;
-            for (var i = startIndex.Value + 1; i < paragraphs.Count; i++)
-            {
-                var text = RunTextMerger.GetParagraphText(paragraphs[i]);
-                var endMatch = LoopEndRegex().Match(text);
-                if (endMatch.Success &&
-                    endMatch.Groups[1].Value.Equals(arrayName, StringComparison.OrdinalIgnoreCase))
-                {
-                    endIndex = i;
-                    break;
-                }
-            }
-
-            if (endIndex < 0)
+            var parent = startPara.Parent;
+            if (parent is null || !ReferenceEquals(parent, endPara.Parent))
             {
                 issues.Error(
-                    "UnclosedLoop",
+                    "LoopParentMismatch",
                     "Docx",
-                    $"Loop start for '{arrayName}' has no matching end marker.",
-                    $"${{ start {arrayName} }}");
-                // Remove the broken start marker so we don't infinite-loop.
-                var broken = paragraphs[startIndex.Value];
-                var brokenText = LoopStartRegex().Replace(RunTextMerger.GetParagraphText(broken), string.Empty);
-                RunTextMerger.SetParagraphText(broken, brokenText);
+                    $"ArrayStart/ArrayEnd for '{arrayName}' must share the same parent (cannot span mismatched containers).",
+                    arrayName);
+                    // Remove start marker text to avoid infinite loop.
+                ClearMarker(startPara);
                 continue;
             }
 
-            var startPara = paragraphs[startIndex.Value];
-            var endPara = paragraphs[endIndex];
-            var parent = startPara.Parent;
-            if (parent == null)
-            {
-                issues.Error("LoopParentMissing", "Docx", $"Cannot expand loop '{arrayName}' — missing parent.");
-                break;
-            }
+            var block = startPara.ElementsAfter().TakeWhile(e => !ReferenceEquals(e, endPara)).ToList();
+            var data = ResolveDataContext(root, loops);
+            var items = _paths.GetArrayItems(data, arrayName, out var coerced, out var missing);
 
-            // Collect block elements between start and end (exclusive), same parent.
-            var block = new List<OpenXmlElement>();
-            var between = startPara.ElementsAfter().TakeWhile(e => !ReferenceEquals(e, endPara)).ToList();
-            foreach (var el in between)
-                block.Add(el);
-
-            var items = _paths.GetArrayItems(root, arrayName, out var coerced, out var missing);
             if (missing)
             {
                 issues.Warning(
                     "MissingLoopArray",
                     "Docx",
-                    $"Loop array '{arrayName}' missing — section left empty.",
+                    $"Array '{arrayName}' missing — section left empty.",
                     arrayName);
             }
             else if (items.Count == 0)
@@ -141,7 +97,7 @@ public sealed partial class DocxTemplateEngine
                 issues.Warning(
                     "EmptyLoopArray",
                     "Docx",
-                    $"Loop array '{arrayName}' is empty — section left empty.",
+                    $"Array '{arrayName}' is empty — section left empty.",
                     arrayName);
             }
             else if (coerced)
@@ -149,30 +105,32 @@ public sealed partial class DocxTemplateEngine
                 issues.Info(
                     "LoopObjectCoerced",
                     "Docx",
-                    $"Loop '{arrayName}' was an object; coerced to a single-item array.",
+                    $"Array '{arrayName}' was an object; coerced to a single-item array.",
                     arrayName);
             }
 
             OpenXmlElement insertAfter = endPara;
             foreach (var item in items)
             {
-                foreach (var templateEl in block)
-                {
-                    var clone = templateEl.CloneNode(true);
-                    if (clone is Paragraph p)
-                        ApplyLoopItemToParagraph(p, arrayName, item, issues);
-                    else
-                    {
-                        foreach (var para in clone.Descendants<Paragraph>())
-                            ApplyLoopItemToParagraph(para, arrayName, item, issues);
-                    }
+                // Isolate clones in a temporary body so nested ArrayStart/ArrayEnd + tables/images
+                // can be processed with this item as the loop context.
+                var temp = new Body();
+                foreach (var el in block)
+                    temp.AppendChild(el.CloneNode(true));
 
-                    insertAfter.InsertAfterSelf(clone);
-                    insertAfter = clone;
+                var childLoops = CloneLoopStack(loops);
+                childLoops.Push(new LoopFrame(arrayName, item));
+                ProcessContainer(temp, root, childLoops, issues);
+
+                while (temp.ChildElements.Count > 0)
+                {
+                    var child = temp.ChildElements[0];
+                    child.Remove();
+                    insertAfter.InsertAfterSelf(child);
+                    insertAfter = child;
                 }
             }
 
-            // Remove start, block originals, and end.
             foreach (var el in block)
                 el.Remove();
             startPara.Remove();
@@ -180,43 +138,69 @@ public sealed partial class DocxTemplateEngine
         }
     }
 
-    private void ApplyLoopItemToParagraph(
-        Paragraph paragraph,
-        string arrayName,
-        JsonElement item,
-        IssueCollector issues)
+    private static bool TryFindLoop(
+        OpenXmlElement container,
+        out Paragraph startPara,
+        out Paragraph endPara,
+        out string arrayName)
     {
-        var text = RunTextMerger.GetParagraphText(paragraph);
-        if (!text.Contains("${", StringComparison.Ordinal))
-            return;
+        startPara = null!;
+        endPara = null!;
+        arrayName = "";
 
-        var replaced = PlaceholderRegex().Replace(text, match =>
+        // Search paragraphs under this container; start/end must share a parent.
+        foreach (var para in container.Descendants<Paragraph>())
         {
-            var inner = match.Groups[1].Value.Trim();
-            var prefix = arrayName + ".i.";
-            if (inner.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                var field = inner[prefix.Length..];
-                if (_paths.TryResolveValue(item, field, out var value))
-                    return value;
+            var text = RunTextMerger.GetParagraphText(para);
+            if (!PlaceholderPatterns.IsArrayStart(text, out var name))
+                continue;
 
-                issues.Warning(
-                    "UnresolvedPlaceholder",
-                    "Docx",
-                    $"Unresolved loop field ${{{inner}}} — replaced with empty.",
-                    inner);
-                return string.Empty;
+            var parent = para.Parent;
+            if (parent is null)
+                continue;
+
+            // Match ArrayEnd with nesting depth for the same array name among siblings.
+            var depth = 0;
+            foreach (var sibling in para.ElementsAfter())
+            {
+                if (sibling is not Paragraph p)
+                    continue;
+
+                var t = RunTextMerger.GetParagraphText(p);
+                if (PlaceholderPatterns.IsArrayStart(t, out var nested) &&
+                    nested.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (PlaceholderPatterns.IsArrayEnd(t, out var endName) &&
+                    endName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (depth == 0)
+                    {
+                        startPara = para;
+                        endPara = p;
+                        arrayName = name;
+                        return true;
+                    }
+
+                    depth--;
+                }
             }
 
-            // Leave non-loop placeholders for the simple pass (if any remain in loop body — unusual).
-            return match.Value;
-        });
+            // Unclosed — still return start with no end? Let caller handle via separate scan.
+            // Skip and continue searching other starts.
+        }
 
-        if (!string.Equals(text, replaced, StringComparison.Ordinal))
-            RunTextMerger.SetParagraphText(paragraph, replaced);
+        return false;
     }
 
-    private void ReplaceSimplePlaceholders(OpenXmlElement container, JsonElement root, IssueCollector issues)
+    private void ReplacePlaceholders(
+        OpenXmlElement container,
+        JsonElement root,
+        Stack<LoopFrame> loops,
+        IssueCollector issues)
     {
         foreach (var paragraph in container.Descendants<Paragraph>().ToList())
         {
@@ -224,53 +208,81 @@ public sealed partial class DocxTemplateEngine
             if (!text.Contains("${", StringComparison.Ordinal))
                 continue;
 
-            // Skip leftover loop markers (should already be gone).
-            if (LoopStartRegex().IsMatch(text) || LoopEndRegex().IsMatch(text))
+            // Skip pure marker paragraphs still present (shouldn't after expand).
+            if (PlaceholderPatterns.IsArrayStart(text, out _) || PlaceholderPatterns.IsArrayEnd(text, out _))
                 continue;
 
-            var replaced = PlaceholderRegex().Replace(text, match =>
+            RunTextMerger.ReplacePlaceholders(paragraph, inner =>
             {
-                var inner = match.Groups[1].Value.Trim();
-                if (inner.Contains(".i.", StringComparison.Ordinal))
+                if (PlaceholderPatterns.IsLoopField(inner, out var arrayName, out var fieldPath))
                 {
+                    var frame = loops.FirstOrDefault(f =>
+                        f.ArrayName.Equals(arrayName, StringComparison.OrdinalIgnoreCase));
+                    if (frame is null)
+                    {
+                        issues.Warning(
+                            "OrphanLoopField",
+                            "Docx",
+                            $"Loop field ${{{inner}}} has no active ArrayStart '{arrayName}' — empty.",
+                            inner);
+                        return string.Empty;
+                    }
+
+                    if (_paths.TryResolveValue(frame.Item, fieldPath, out var value))
+                        return value;
+
                     issues.Warning(
-                        "OrphanLoopField",
+                        "UnresolvedPlaceholder",
                         "Docx",
-                        $"Loop field ${{{inner}}} found outside a loop — replaced with empty.",
+                        $"Unresolved ${{{inner}}} — empty.",
                         inner);
                     return string.Empty;
                 }
 
-                if (_paths.TryResolveValue(root, inner, out var value))
+                // Ignore leftover ArrayStart/ArrayEnd inners if any.
+                if (inner.StartsWith("ArrayStart", StringComparison.OrdinalIgnoreCase) ||
+                    inner.StartsWith("ArrayEnd", StringComparison.OrdinalIgnoreCase))
+                    return string.Empty;
+
+                if (_paths.TryResolveValue(root, inner.Trim(), out var rootValue))
                 {
-                    if (string.IsNullOrEmpty(value))
+                    if (string.IsNullOrEmpty(rootValue))
                     {
                         issues.Warning(
                             "EmptyOptionalField",
                             "Docx",
-                            $"Field '{inner}' is empty.",
-                            inner);
+                            $"Field '{inner.Trim()}' is empty.",
+                            inner.Trim());
                     }
 
-                    return value;
+                    return rootValue;
                 }
 
                 issues.Warning(
                     "UnresolvedPlaceholder",
                     "Docx",
-                    $"Unresolved placeholder ${{{inner}}} — replaced with empty.",
-                    inner);
+                    $"Unresolved placeholder ${{{inner.Trim()}}} — empty.",
+                    inner.Trim());
                 return string.Empty;
             });
-
-            if (!string.Equals(text, replaced, StringComparison.Ordinal))
-                RunTextMerger.SetParagraphText(paragraph, replaced);
-
-            // Optional: remove paragraph if it became empty after only containing a placeholder.
-            if (string.IsNullOrWhiteSpace(replaced))
-            {
-                // Keep empty paragraphs for spacing fidelity unless they were purely a marker.
-            }
         }
+    }
+
+    private JsonElement ResolveDataContext(JsonElement root, Stack<LoopFrame> loops)
+        => loops.Count > 0 ? loops.Peek().Item : root;
+
+    private static Stack<LoopFrame> CloneLoopStack(Stack<LoopFrame> source)
+    {
+        var clone = new Stack<LoopFrame>();
+        foreach (var frame in source.Reverse())
+            clone.Push(frame);
+        return clone;
+    }
+
+    private static void ClearMarker(Paragraph paragraph)
+    {
+        var text = RunTextMerger.GetParagraphText(paragraph);
+        if (text.Length > 0)
+            RunTextMerger.ReplaceRange(paragraph, 0, text.Length, string.Empty);
     }
 }

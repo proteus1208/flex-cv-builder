@@ -10,18 +10,16 @@ namespace CvGenerator.Docx.Tests;
 public class DocxTemplateEngineTests
 {
     [Fact]
-    public void Replaces_simple_placeholders_including_split_runs()
+    public void Replaces_simple_placeholders_including_split_runs_and_keeps_run_props()
     {
         var template = CreateTempDocx(doc =>
         {
-            // Split "${name}" across runs: "${" + "name" + "}"
-            var p = new Paragraph(
-                new Run(new Text("${")),
-                new Run(new Text("name")),
-                new Run(new Text("}")),
-                new Run(new Text(" / ")),
-                new Run(new Text("${linkedin}")));
-            doc.MainDocumentPart!.Document.Body!.AppendChild(p);
+            var run1 = new Run(new RunProperties(new Bold()), new Text("${"));
+            var run2 = new Run(new RunProperties(new Bold()), new Text("name"));
+            var run3 = new Run(new RunProperties(new Bold()), new Text("}"));
+            var run4 = new Run(new Text(" / "));
+            var run5 = new Run(new RunProperties(new Color { Val = "FF0000" }), new Text("${linkedin}"));
+            doc.MainDocumentPart!.Document.Body!.AppendChild(new Paragraph(run1, run2, run3, run4, run5));
         });
 
         var output = Path.ChangeExtension(template, ".out.docx");
@@ -36,6 +34,10 @@ public class DocxTemplateEngineTests
             Assert.Contains("Ada", text);
             Assert.Contains("https://li.test", text);
             Assert.DoesNotContain("${name}", text);
+
+            var boldRun = result.MainDocumentPart.Document.Body.Descendants<Run>()
+                .FirstOrDefault(r => r.InnerText.Contains("Ada"));
+            Assert.NotNull(boldRun?.RunProperties?.Bold);
         }
         finally
         {
@@ -45,15 +47,15 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
-    public void Expands_repeating_sections()
+    public void Expands_all_array_items_with_ArrayStart_End_and_arrayname_i()
     {
         var template = CreateTempDocx(doc =>
         {
             var body = doc.MainDocumentPart!.Document.Body!;
             body.AppendChild(new Paragraph(new Run(new Text("Header"))));
-            body.AppendChild(new Paragraph(new Run(new Text("${ start experience}"))));
-            body.AppendChild(new Paragraph(new Run(new Text("${experience.i.title} at ${experience.i.company}"))));
-            body.AppendChild(new Paragraph(new Run(new Text("${ end experience}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart experience}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${experience_i.title} at ${experience_i.company}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd experience}"))));
             body.AppendChild(new Paragraph(new Run(new Text("Footer"))));
         });
 
@@ -64,7 +66,8 @@ public class DocxTemplateEngineTests
             {
               "experience": [
                 {"title":"Eng","company":"A"},
-                {"title":"Lead","company":"B"}
+                {"title":"Lead","company":"B"},
+                {"title":"Intern","company":"C"}
               ]
             }
             """);
@@ -75,9 +78,53 @@ public class DocxTemplateEngineTests
             var text = result.MainDocumentPart!.Document.Body!.InnerText;
             Assert.Contains("Eng at A", text);
             Assert.Contains("Lead at B", text);
-            Assert.DoesNotContain("start experience", text);
+            Assert.Contains("Intern at C", text);
+            Assert.DoesNotContain("ArrayStart", text);
             Assert.Contains("Header", text);
             Assert.Contains("Footer", text);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
+    public void Nested_ArrayStart_expands_inner_arrays()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart experience}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${experience_i.title}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart highlights}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("- ${highlights_i.text}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd highlights}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd experience}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "experience": [
+                {"title":"A", "highlights":[{"text":"a1"},{"text":"a2"}]},
+                {"title":"B", "highlights":[{"text":"b1"}]}
+              ]
+            }
+            """);
+            var issues = new IssueCollector();
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, issues);
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("A", text);
+            Assert.Contains("a1", text);
+            Assert.Contains("a2", text);
+            Assert.Contains("B", text);
+            Assert.Contains("b1", text);
         }
         finally
         {
@@ -112,14 +159,14 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
-    public void Scanner_detects_tokens()
+    public void Scanner_detects_ArrayStart_tokens()
     {
         var scanner = new PlaceholderScanner();
-        var found = scanner.ScanText("${name} ${ start exp} ${exp.i.title} ${ end exp}");
+        var found = scanner.ScanText("${name} ${ArrayStart exp} ${exp_i.title} ${ArrayEnd exp}");
         Assert.Contains(found, p => p.Kind == "simple" && p.JsonPath == "name");
-        Assert.Contains(found, p => p.Kind == "loop-start" && p.JsonPath == "exp");
+        Assert.Contains(found, p => p.Kind == "array-start" && p.JsonPath == "exp");
         Assert.Contains(found, p => p.Kind == "loop-field");
-        Assert.Contains(found, p => p.Kind == "loop-end");
+        Assert.Contains(found, p => p.Kind == "array-end");
     }
 
     [Fact]
@@ -133,7 +180,6 @@ public class DocxTemplateEngineTests
         var root = Path.Combine(Path.GetTempPath(), "cvgen-all-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
-        // Force PDF failure with a real path that is not a working LibreOffice binary.
         var fakeSoffice = Path.Combine(root, "fake-soffice");
         File.WriteAllText(fakeSoffice, "#!/bin/sh\nexit 1\n");
         if (!OperatingSystem.IsWindows())

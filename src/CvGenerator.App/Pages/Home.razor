@@ -112,7 +112,7 @@
                     @foreach (var p in State.Placeholders)
                     {
                         <div class="placeholder-item">
-                            <span>@p.Token</span>
+                            <span class="ph-token">@((MarkupString)FormatPlaceholderHtml(p))</span>
                             <span class="muted">@(p.JsonPath ?? p.Kind) · @p.Kind</span>
                         </div>
                     }
@@ -199,6 +199,8 @@
 @code {
     private ElementReference _jsonEditor;
 
+    private bool _firstRender = true;
+
     protected override void OnInitialized()
     {
         State.Changed += OnChanged;
@@ -206,7 +208,38 @@
         State.RefreshPreviewAndLiveValidation();
     }
 
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender || !_firstRender)
+            return;
+        _firstRender = false;
+        // Ensure highlight mirror matches textarea on first paint.
+        State.RefreshPreviewAndLiveValidation();
+        StateHasChanged();
+    }
+
     public void Dispose() => State.Changed -= OnChanged;
+
+    private static string FormatPlaceholderHtml(CvGenerator.Docx.Services.PlaceholderInfo p)
+    {
+        var token = System.Net.WebUtility.HtmlEncode(p.Token);
+        return p.Kind switch
+        {
+            "array-start" => $"<span class=\"ph-brace\">$</span><span class=\"ph-brace\">{{</span><span class=\"ph-keyword\">ArrayStart</span> <span class=\"ph-var\">{System.Net.WebUtility.HtmlEncode(p.JsonPath ?? "")}</span><span class=\"ph-brace\">}}</span>",
+            "array-end" => $"<span class=\"ph-brace\">$</span><span class=\"ph-brace\">{{</span><span class=\"ph-keyword\">ArrayEnd</span> <span class=\"ph-var\">{System.Net.WebUtility.HtmlEncode(p.JsonPath ?? "")}</span><span class=\"ph-brace\">}}</span>",
+            "loop-field" => ColorizeSimpleToken(token),
+            _ => ColorizeSimpleToken(token)
+        };
+    }
+
+    private static string ColorizeSimpleToken(string encodedToken)
+    {
+        // encodedToken looks like ${...}
+        if (!encodedToken.StartsWith("${", StringComparison.Ordinal) || !encodedToken.EndsWith("}", StringComparison.Ordinal))
+            return $"<span class=\"ph-var\">{encodedToken}</span>";
+        var inner = encodedToken[2..^1];
+        return $"<span class=\"ph-brace\">$</span><span class=\"ph-brace\">{{</span><span class=\"ph-var\">{inner}</span><span class=\"ph-brace\">}}</span>";
+    }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
 

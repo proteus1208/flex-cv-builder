@@ -1,34 +1,22 @@
 using System.Text.RegularExpressions;
 using CvGenerator.Core.Models;
 using CvGenerator.Core.Services;
+using CvGenerator.Docx.Internal;
 using DocumentFormat.OpenXml.Packaging;
 
 namespace CvGenerator.Docx.Services;
 
 public sealed partial class TemplateSyntaxValidator
 {
-    [GeneratedRegex(@"\$\{([^{}]*)\}")]
-    private static partial Regex PlaceholderRegex();
-
-    [GeneratedRegex(@"^\s*start\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$", RegexOptions.IgnoreCase)]
-    private static partial Regex StartRegex();
-
-    [GeneratedRegex(@"^\s*end\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$", RegexOptions.IgnoreCase)]
-    private static partial Regex EndRegex();
-
     [GeneratedRegex(@"^\s*([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*$")]
     private static partial Regex SimplePathRegex();
-
-    [GeneratedRegex(@"^\s*([A-Za-z_][A-Za-z0-9_.]*)\.i\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*$")]
-    private static partial Regex LoopFieldRegex();
 
     public IReadOnlyList<GenerationIssue> ValidateFile(string docxPath)
     {
         try
         {
             using var doc = WordprocessingDocument.Open(docxPath, false);
-            var text = ExtractAllText(doc);
-            return ValidateText(text);
+            return ValidateText(ExtractAllText(doc));
         }
         catch (Exception ex)
         {
@@ -51,7 +39,7 @@ public sealed partial class TemplateSyntaxValidator
         var ends = new List<(string Name, string Token)>();
         var loopFields = new List<(string Array, string Token)>();
 
-        foreach (Match match in PlaceholderRegex().Matches(text ?? string.Empty))
+        foreach (Match match in PlaceholderPatterns.AnyPlaceholder().Matches(text ?? string.Empty))
         {
             var token = match.Value;
             var inner = match.Groups[1].Value;
@@ -62,110 +50,99 @@ public sealed partial class TemplateSyntaxValidator
                 continue;
             }
 
-            // Reject nested or broken forms with too many structural keywords.
-            var parts = inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (parts.Length > 2 &&
-                !StartRegex().IsMatch(inner) &&
-                !EndRegex().IsMatch(inner))
+            if (LooksLikeLegacyOrBadKeyword(inner, out var hint))
             {
-                issues.Error(
-                    "InvalidPlaceholder",
-                    "Template",
-                    $"Too many parts inside placeholder: {token}",
-                    token);
+                issues.Error("InvalidPlaceholderKeyword", "Template", $"{hint} in {token}", token);
                 continue;
             }
 
-            if (LooksLikeKeywordMistake(inner, out var keywordHint))
+            if (PlaceholderPatterns.ArrayStart().IsMatch(token))
             {
-                issues.Error(
-                    "InvalidPlaceholderKeyword",
-                    "Template",
-                    $"Invalid placeholder keyword in {token}. {keywordHint}",
-                    token);
-                continue;
-            }
-
-            var start = StartRegex().Match(inner);
-            if (start.Success)
-            {
+                var name = PlaceholderPatterns.ArrayStart().Match(token).Groups[1].Value;
+                var parts = inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 2)
                 {
-                    issues.Error(
-                        "InvalidLoopStart",
-                        "Template",
-                        $"Loop start must be exactly `${{ start name }}`: {token}",
-                        token);
+                    issues.Error("InvalidArrayStart", "Template",
+                        $"ArrayStart must be `${{ArrayStart name}}`: {token}", token);
                 }
                 else
                 {
-                    starts.Add((start.Groups[1].Value, token));
+                    starts.Add((name, token));
                 }
 
                 continue;
             }
 
-            var end = EndRegex().Match(inner);
-            if (end.Success)
+            if (PlaceholderPatterns.ArrayEnd().IsMatch(token))
             {
+                var name = PlaceholderPatterns.ArrayEnd().Match(token).Groups[1].Value;
+                var parts = inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 2)
                 {
-                    issues.Error(
-                        "InvalidLoopEnd",
-                        "Template",
-                        $"Loop end must be exactly `${{ end name }}`: {token}",
-                        token);
+                    issues.Error("InvalidArrayEnd", "Template",
+                        $"ArrayEnd must be `${{ArrayEnd name}}`: {token}", token);
                 }
                 else
                 {
-                    ends.Add((end.Groups[1].Value, token));
+                    ends.Add((name, token));
                 }
 
                 continue;
             }
 
-            var loopField = LoopFieldRegex().Match(inner);
-            if (loopField.Success)
+            if (PlaceholderPatterns.IsLoopField(inner, out var arrayName, out _))
             {
-                loopFields.Add((loopField.Groups[1].Value, token));
+                loopFields.Add((arrayName, token));
+                continue;
+            }
+
+            var trimmedParts = inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (trimmedParts.Length > 1)
+            {
+                issues.Error("InvalidPlaceholder", "Template",
+                    $"Too many parts inside placeholder: {token}", token);
                 continue;
             }
 
             if (SimplePathRegex().IsMatch(inner))
                 continue;
 
+            // Legacy .i. form
+            if (inner.Contains(".i.", StringComparison.Ordinal))
+            {
+                issues.Error(
+                    "LegacyLoopField",
+                    "Template",
+                    $"Use ${{arrayname_i.field}} instead of ${{arrayname.i.field}}: {token}",
+                    token);
+                continue;
+            }
+
             issues.Error(
                 "InvalidPlaceholder",
                 "Template",
-                $"Invalid placeholder syntax: {token}. Use ${{path}}, ${{ start name }}, ${{ end name }}, or ${{name.i.field}}.",
+                $"Invalid placeholder: {token}. Use ${{path}}, ${{ArrayStart name}}, ${{ArrayEnd name}}, or ${{name_i.field}}.",
                 token);
         }
 
-        // Pair start/end by name (multiset).
         var startCounts = starts.GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
         var endCounts = ends.GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
 
-        foreach (var (name, token) in starts)
+        foreach (var name in startCounts.Keys.ToList())
         {
-            endCounts.TryGetValue(name, out var endCount);
-            startCounts.TryGetValue(name, out var startCount);
-            if (endCount == 0)
+            endCounts.TryGetValue(name, out var ec);
+            var sc = startCounts[name];
+            if (ec == 0)
             {
-                issues.Error(
-                    "UnpairedLoopStart",
-                    "Template",
-                    $"Loop start has no matching end: {token}",
-                    token);
+                issues.Error("UnpairedArrayStart", "Template",
+                    $"ArrayStart has no matching ArrayEnd for '{name}'.", name);
             }
-            else if (startCount != endCount)
+            else if (sc != ec)
             {
-                issues.Error(
-                    "UnbalancedLoop",
-                    "Template",
-                    $"Loop '{name}' has {startCount} start(s) and {endCount} end(s).",
-                    name);
+                issues.Error("UnbalancedArray", "Template",
+                    $"Array '{name}' has {sc} ArrayStart(s) and {ec} ArrayEnd(s).", name);
             }
         }
 
@@ -173,46 +150,45 @@ public sealed partial class TemplateSyntaxValidator
         {
             if (!startCounts.ContainsKey(name))
             {
-                issues.Error(
-                    "UnpairedLoopEnd",
-                    "Template",
-                    $"Loop end has no matching start: {token}",
-                    token);
+                issues.Error("UnpairedArrayEnd", "Template",
+                    $"ArrayEnd has no matching ArrayStart: {token}", token);
             }
         }
 
-        var knownLoops = new HashSet<string>(startCounts.Keys, StringComparer.OrdinalIgnoreCase);
         foreach (var (array, token) in loopFields)
         {
-            if (!knownLoops.Contains(array))
+            if (!startCounts.ContainsKey(array))
             {
-                issues.Warning(
-                    "OrphanLoopField",
-                    "Template",
-                    $"Loop field {token} has no matching `${{ start {array} }}`.",
-                    token);
+                issues.Warning("OrphanLoopField", "Template",
+                    $"Loop field {token} has no matching ${{ArrayStart {array}}}.", token);
             }
         }
 
-        // Deduplicate unbalanced messages (same name reported twice from starts).
         return issues.Issues
             .GroupBy(i => $"{i.Code}|{i.Path}|{i.Message}")
             .Select(g => g.First())
             .ToList();
     }
 
-    private static bool LooksLikeKeywordMistake(string inner, out string hint)
+    private static bool LooksLikeLegacyOrBadKeyword(string inner, out string hint)
     {
         hint = string.Empty;
         var first = inner.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
         var lower = first.ToLowerInvariant();
-        if (lower is "start" or "end")
+
+        if (lower is "arraystart" or "arrayend")
             return false;
 
-        string[] mistakes = ["starts", "begin", "beginning", "ends", "finish", "stop", "for", "each", "loop"];
+        if (lower is "start" or "end")
+        {
+            hint = "Use ArrayStart / ArrayEnd (not start / end)";
+            return true;
+        }
+
+        string[] mistakes = ["starts", "begin", "ends", "finish", "stop", "for", "each", "loop"];
         if (mistakes.Contains(lower))
         {
-            hint = "Use only `start` / `end`.";
+            hint = "Invalid keyword — use ArrayStart / ArrayEnd";
             return true;
         }
 
@@ -224,7 +200,6 @@ public sealed partial class TemplateSyntaxValidator
         var parts = new List<string>();
         if (doc.MainDocumentPart?.Document?.Body is { } body)
             parts.Add(body.InnerText);
-
         if (doc.MainDocumentPart != null)
         {
             foreach (var hp in doc.MainDocumentPart.HeaderParts)
