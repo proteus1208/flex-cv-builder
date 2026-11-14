@@ -15,8 +15,12 @@ public sealed class AppState
     private readonly TemplateCatalogService _templates;
     private readonly PlaceholderScanner _scanner;
     private readonly GenerationService _generation;
+    private readonly TemplateSyntaxValidator _templateValidator = new();
+    private readonly LiveJsonValidator _liveValidator = new();
+    private readonly PdfConversionService _pdf = new();
     private SettingsStore _settingsStore = null!;
     private AppSettings _settings = null!;
+    private IReadOnlyList<GenerationIssue> _templateIssues = Array.Empty<GenerationIssue>();
 
     public AppState(
         CvJsonService json,
@@ -41,15 +45,17 @@ public sealed class AppState
     public string? ResolvedLibreOfficePath { get; private set; }
     public bool IsLibreOfficeReady => !string.IsNullOrEmpty(ResolvedLibreOfficePath);
     public IReadOnlyList<TemplateInfo> Templates { get; private set; } = Array.Empty<TemplateInfo>();
-    private readonly PdfConversionService _pdf = new();
     public string? SelectedTemplateId { get; set; }
     public IReadOnlyList<PlaceholderInfo> Placeholders { get; private set; } = Array.Empty<PlaceholderInfo>();
     public string OutputPreview { get; private set; } = "";
+    public string JsonHighlightHtml { get; private set; } = "";
+    public IReadOnlyList<JsonMark> JsonMarks { get; private set; } = Array.Empty<JsonMark>();
     public IReadOnlyList<GenerationIssue> Issues { get; private set; } = Array.Empty<GenerationIssue>();
     public GenerationStatus Status { get; private set; } = GenerationStatus.Ready;
     public string? LastOutputDirectory { get; private set; }
     public bool IsBusy { get; private set; }
     public string IssueFilter { get; set; } = "All";
+    public string CopyFeedback { get; private set; } = "";
 
     public void Initialize(AppSettings settings, SettingsStore store, string templatesRoot)
     {
@@ -60,7 +66,7 @@ public sealed class AppState
         LibreOfficePath = settings.LibreOfficePath;
         RefreshLibreOfficeStatus();
         RefreshTemplates();
-        RefreshPreview();
+        RefreshPreviewAndLiveValidation();
         Notify();
     }
 
@@ -75,6 +81,7 @@ public sealed class AppState
         if (SelectedTemplateId is null || Templates.All(t => t.Id != SelectedTemplateId))
             SelectedTemplateId = Templates.FirstOrDefault()?.Id;
         RefreshPlaceholders();
+        RefreshPreviewAndLiveValidation();
     }
 
     public void RefreshPlaceholders()
@@ -83,20 +90,23 @@ public sealed class AppState
         if (path is null)
         {
             Placeholders = Array.Empty<PlaceholderInfo>();
+            _templateIssues = Array.Empty<GenerationIssue>();
             return;
         }
 
         try
         {
             Placeholders = _scanner.ScanFile(path);
+            _templateIssues = _templateValidator.ValidateFile(path);
         }
         catch
         {
             Placeholders = Array.Empty<PlaceholderInfo>();
+            _templateIssues = Array.Empty<GenerationIssue>();
         }
     }
 
-    public void RefreshPreview()
+    public void RefreshPreviewAndLiveValidation()
     {
         try
         {
@@ -106,6 +116,21 @@ public sealed class AppState
         catch
         {
             OutputPreview = Path.Combine(OutputRoot, DateTime.Now.ToString("yyyy-MM-dd"), "(invalid JSON)");
+        }
+
+        var live = _liveValidator.Validate(
+            JsonText,
+            Placeholders.Select(p => (p.Kind, p.JsonPath, p.Token)),
+            _templateIssues);
+
+        JsonHighlightHtml = live.HighlightHtml;
+        JsonMarks = live.Marks;
+        if (!IsBusy)
+        {
+            Issues = live.Issues;
+            Status = live.Issues.Any(i => i.Severity == IssueSeverity.Error)
+                ? GenerationStatus.Failed
+                : GenerationStatus.Ready;
         }
     }
 
@@ -117,7 +142,7 @@ public sealed class AppState
         _settings.OutputRoot = path;
         _settingsStore.Save(_settings);
         Directory.CreateDirectory(path);
-        RefreshPreview();
+        RefreshPreviewAndLiveValidation();
         Notify();
     }
 
@@ -188,7 +213,7 @@ public sealed class AppState
         if (dlg.ShowDialog() != true)
             return;
         JsonText = File.ReadAllText(dlg.FileName);
-        RefreshPreview();
+        RefreshPreviewAndLiveValidation();
         Notify();
     }
 
@@ -211,7 +236,7 @@ public sealed class AppState
         try
         {
             JsonText = _json.Format(JsonText);
-            RefreshPreview();
+            RefreshPreviewAndLiveValidation();
             Notify();
         }
         catch (Exception ex)
@@ -221,6 +246,7 @@ public sealed class AppState
                 new GenerationIssue(IssueSeverity.Error, "InvalidJson", "ParseJson", ex.Message)
             };
             Status = GenerationStatus.Failed;
+            JsonHighlightHtml = "";
             Notify();
         }
     }
@@ -229,14 +255,13 @@ public sealed class AppState
     {
         SelectedTemplateId = id;
         RefreshPlaceholders();
+        RefreshPreviewAndLiveValidation();
         Notify();
     }
 
     public void ClearIssues()
     {
-        Issues = Array.Empty<GenerationIssue>();
-        if (Status is GenerationStatus.Failed or GenerationStatus.Partial or GenerationStatus.Success)
-            Status = GenerationStatus.Ready;
+        RefreshPreviewAndLiveValidation();
         Notify();
     }
 
@@ -257,6 +282,36 @@ public sealed class AppState
             "Warnings" => Issues.Where(i => i.Severity == IssueSeverity.Warning),
             _ => Issues
         };
+    }
+
+    public void CopyOutputDirectoryPath()
+    {
+        var path = !string.IsNullOrWhiteSpace(LastOutputDirectory)
+            ? LastOutputDirectory
+            : OutputPreview;
+
+        try
+        {
+            System.Windows.Clipboard.SetText(path);
+            CopyFeedback = "Copied";
+        }
+        catch
+        {
+            CopyFeedback = "Copy failed";
+        }
+
+        Notify();
+        _ = ClearCopyFeedbackLater();
+    }
+
+    private async Task ClearCopyFeedbackLater()
+    {
+        await Task.Delay(1500);
+        if (CopyFeedback is "Copied" or "Copy failed")
+        {
+            CopyFeedback = "";
+            Notify();
+        }
     }
 
     public async Task GenerateAllAsync()

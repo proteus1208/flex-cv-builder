@@ -133,7 +133,15 @@ public sealed partial class DocxTemplateEngine
                 issues.Warning(
                     "MissingLoopArray",
                     "Docx",
-                    $"Loop array '{arrayName}' missing — section removed.",
+                    $"Loop array '{arrayName}' missing — section left empty.",
+                    arrayName);
+            }
+            else if (items.Count == 0)
+            {
+                issues.Warning(
+                    "EmptyLoopArray",
+                    "Docx",
+                    $"Loop array '{arrayName}' is empty — section left empty.",
                     arrayName);
             }
             else if (coerced)

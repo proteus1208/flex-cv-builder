@@ -1,7 +1,10 @@
 @page "/"
 @using CvGenerator.App.Services
 @using CvGenerator.Core.Models
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
 @inject AppState State
+@inject IJSRuntime JS
 @implements IDisposable
 
 <div class="shell">
@@ -51,18 +54,36 @@
             <div class="toolbar">
                 <button class="btn" type="button" @onclick="OpenJson">Open</button>
                 <button class="btn" type="button" @onclick="FormatJson">Format</button>
-                <button class="btn" type="button" @onclick="OnJsonChanged">Validate path</button>
+                <button class="btn" type="button" @onclick="OnJsonChanged">Validate</button>
             </div>
-            <textarea class="json-editor"
-                      @bind="State.JsonText"
-                      @bind:event="oninput"
-                      @bind:after="OnJsonChanged"
-                      spellcheck="false"></textarea>
+
+            @if (State.JsonMarks.Any())
+            {
+                <div class="json-mark-bar">
+                    @foreach (var mark in State.JsonMarks)
+                    {
+                        <span class="@(mark.Severity == IssueSeverity.Error ? "json-chip error" : "json-chip warn")" title="@mark.Reason">
+                            @mark.Path
+                        </span>
+                    }
+                </div>
+            }
+
+            <div class="json-editor-wrap">
+                <pre class="json-highlight" aria-hidden="true">@((MarkupString)State.JsonHighlightHtml)</pre>
+                <textarea class="json-editor"
+                          @ref="_jsonEditor"
+                          @bind="State.JsonText"
+                          @bind:event="oninput"
+                          @bind:after="OnJsonChanged"
+                          @onscroll="OnJsonScroll"
+                          spellcheck="false"></textarea>
+            </div>
         </section>
 
         <section class="panel">
             <div class="panel-title">Template</div>
-            <div class="toolbar">
+            <div class="toolbar toolbar-align">
                 <select class="select-wide" value="@State.SelectedTemplateId" @onchange="OnTemplateChanged">
                     @if (!State.Templates.Any())
                     {
@@ -99,7 +120,23 @@
             </div>
 
             <div class="panel-title">Output preview path</div>
-            <div class="preview-path">@State.OutputPreview</div>
+            <div class="preview-path-row">
+                <div class="preview-path" title="@State.OutputPreview">@State.OutputPreview</div>
+                <button class="btn btn-icon"
+                        type="button"
+                        title="Copy output directory path"
+                        @onclick="CopyOutputPath"
+                        aria-label="Copy output directory path">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="2"/>
+                        <path d="M5 15V5a2 2 0 0 1 2-2h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                @if (!string.IsNullOrEmpty(State.CopyFeedback))
+                {
+                    <span class="copy-feedback">@State.CopyFeedback</span>
+                }
+            </div>
         </section>
     </div>
 
@@ -107,7 +144,7 @@
         <div class="debug-header">
             <div class="debug-title">Debug Error List</div>
             <div class="debug-actions">
-                <select @bind="State.IssueFilter" @bind:after="Notify">
+                <select class="select-compact" @bind="State.IssueFilter" @bind:after="Notify">
                     <option value="All">All</option>
                     <option value="Errors">Errors only</option>
                     <option value="Warnings">Warnings</option>
@@ -160,10 +197,13 @@
 </div>
 
 @code {
+    private ElementReference _jsonEditor;
+
     protected override void OnInitialized()
     {
         State.Changed += OnChanged;
         State.RefreshLibreOfficeStatus();
+        State.RefreshPreviewAndLiveValidation();
     }
 
     public void Dispose() => State.Changed -= OnChanged;
@@ -179,6 +219,8 @@
     private void OpenJson() => State.OpenJsonFile();
     private void FormatJson() => State.FormatJson();
     private void ImportTemplate() => State.ImportTemplate();
+    private void CopyOutputPath() => State.CopyOutputDirectoryPath();
+
     private void RefreshTemplates()
     {
         State.RefreshTemplates();
@@ -189,13 +231,13 @@
     {
         State.RefreshLibreOfficeStatus();
         State.RefreshTemplates();
-        State.RefreshPreview();
+        State.RefreshPreviewAndLiveValidation();
         StateHasChanged();
     }
 
     private void OnJsonChanged()
     {
-        State.RefreshPreview();
+        State.RefreshPreviewAndLiveValidation();
         StateHasChanged();
     }
 
@@ -208,6 +250,12 @@
     private void OpenOutput() => State.OpenLastOutput();
     private void ClearIssues() => State.ClearIssues();
 
+    private async Task OnJsonScroll(EventArgs _)
+    {
+        try { await JS.InvokeVoidAsync("cvSyncJsonScroll", _jsonEditor); }
+        catch { /* ignore */ }
+    }
+
     private async Task CopyIssues()
     {
         var text = State.GetFilteredIssuesText();
@@ -217,7 +265,7 @@
         }
         catch
         {
-            // Clipboard may fail in some hosts; ignore.
+            // ignore
         }
 
         await Task.CompletedTask;

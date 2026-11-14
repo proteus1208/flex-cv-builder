@@ -21,6 +21,7 @@ public sealed class GenerationService
     private readonly NotesExportService _notes = new();
     private readonly DocxTemplateEngine _docx = new();
     private readonly PdfConversionService _pdf = new();
+    private readonly TemplateSyntaxValidator _templateValidator = new();
 
     public GenerationResult GenerateAll(GenerationRequest request, IssueCollector issues)
     {
@@ -44,6 +45,12 @@ public sealed class GenerationService
                 issues.Error("TemplateMissing", "Docx", "DOCX template file was not found.", request.TemplatePath);
                 return Failed(issues);
             }
+
+            foreach (var issue in _templateValidator.ValidateFile(request.TemplatePath))
+                issues.Add(issue);
+
+            if (issues.HasErrorsInSteps("Template"))
+                return Failed(issues);
 
             var outputDir = _folders.CreateOutputDirectory(request.OutputRoot, root, issues);
             if (string.IsNullOrEmpty(outputDir) || issues.HasErrorsInSteps("Folder"))
