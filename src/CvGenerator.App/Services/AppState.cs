@@ -365,6 +365,14 @@ public sealed class AppState : IDisposable
     private static string TrimPreview(string value)
     {
         var oneLine = value.Replace("\r", " ").Replace("\n", " ").Trim();
+
+        // [label](url) → show label only (keep full text in title via Display)
+        var link = System.Text.RegularExpressions.Regex.Match(
+            oneLine,
+            @"^\[([^\]]+)\]\(([^)]+)\)\s*$");
+        if (link.Success)
+            oneLine = link.Groups[1].Value.Trim();
+
         return oneLine.Length <= 48 ? oneLine : oneLine[..45] + "…";
     }
 
