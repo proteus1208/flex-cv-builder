@@ -103,17 +103,20 @@
 
             <div class="panel-title">Placeholders found</div>
             <div class="placeholder-list">
-                @if (!State.Placeholders.Any())
+                @if (!State.PlaceholderBindings.Any())
                 {
                     <div class="empty">Select or import a .docx template to inspect placeholders.</div>
                 }
                 else
                 {
-                    @foreach (var p in State.Placeholders)
+                    @foreach (var b in State.PlaceholderBindings)
                     {
                         <div class="placeholder-item">
-                            <span class="ph-token">@((MarkupString)FormatPlaceholderHtml(p))</span>
-                            <span class="muted">@(p.JsonPath ?? p.Kind) · @p.Kind</span>
+                            <span class="ph-token">@((MarkupString)FormatPlaceholderHtml(b.Placeholder))</span>
+                            <span class="ph-bind @BindClass(b.State)" title="@b.Display">
+                                <span class="ph-bind-state">@BindLabel(b.State)</span>
+                                <span class="ph-bind-value">@b.Display</span>
+                            </span>
                         </div>
                     }
                 }
@@ -122,20 +125,26 @@
             <div class="panel-title">Output preview path</div>
             <div class="preview-path-row">
                 <div class="preview-path" title="@State.OutputPreview">@State.OutputPreview</div>
-                <button class="btn btn-icon"
+                <button class="btn btn-icon @(State.ShowCopyCheckIcon ? "btn-icon-ok" : "")"
                         type="button"
-                        title="Copy output directory path"
+                        title="@(State.IsCopyArmed ? "Copy output directory path" : "Copied")"
+                        disabled="@(!State.IsCopyArmed)"
                         @onclick="CopyOutputPath"
                         aria-label="Copy output directory path">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="2"/>
-                        <path d="M5 15V5a2 2 0 0 1 2-2h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
+                    @if (State.ShowCopyCheckIcon)
+                    {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M5 12.5l5 5L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    }
+                    else
+                    {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="2"/>
+                            <path d="M5 15V5a2 2 0 0 1 2-2h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    }
                 </button>
-                @if (!string.IsNullOrEmpty(State.CopyFeedback))
-                {
-                    <span class="copy-feedback">@State.CopyFeedback</span>
-                }
             </div>
         </section>
     </div>
@@ -317,5 +326,23 @@
         GenerationStatus.Partial => "status-partial",
         GenerationStatus.Failed => "status-failed",
         _ => "status-ready"
+    };
+
+    private static string BindClass(string state) => state switch
+    {
+        "ok" => "bind-ok",
+        "missing" => "bind-missing",
+        "empty" => "bind-empty",
+        "partial" => "bind-partial",
+        _ => "bind-marker"
+    };
+
+    private static string BindLabel(string state) => state switch
+    {
+        "ok" => "matched",
+        "missing" => "missing",
+        "empty" => "empty",
+        "partial" => "partial",
+        _ => "marker"
     };
 }

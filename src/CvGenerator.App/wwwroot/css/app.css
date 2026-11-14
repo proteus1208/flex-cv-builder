@@ -365,9 +365,10 @@ button, input, select, textarea {
 
 .placeholder-item {
   display: grid;
-  grid-template-columns: 1.15fr 1fr;
-  gap: 0.5rem;
-  padding: 0.42rem 0.8rem;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  padding: 0.45rem 0.8rem;
   font-family: var(--mono);
   font-size: 0.75rem;
   border-bottom: 1px solid #e8eef1;
@@ -375,12 +376,50 @@ button, input, select, textarea {
 
 .placeholder-item:last-child { border-bottom: none; }
 
-.ph-token { font-weight: 500; }
+.ph-token { font-weight: 500; overflow-wrap: anywhere; }
 .ph-brace { color: #64748b; }
 .ph-keyword { color: #7c3aed; font-weight: 700; }
 .ph-var { color: #0e7c66; font-weight: 600; }
 
-.json-mark-bar .json-chip.warn { /* missing template↔json key */ }
+.ph-bind {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.ph-bind-state {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ph-bind-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.bind-ok .ph-bind-state { color: var(--success); }
+.bind-missing .ph-bind-state { color: var(--error); }
+.bind-empty .ph-bind-state,
+.bind-partial .ph-bind-state { color: #b54708; }
+.bind-marker .ph-bind-state { color: #7c3aed; }
+
+.btn-icon-ok {
+  border-color: #86efac !important;
+  background: #ecfdf5 !important;
+  color: var(--success) !important;
+}
+
+.btn-icon:disabled {
+  opacity: 1;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
 
 .muted { color: var(--muted); }
 

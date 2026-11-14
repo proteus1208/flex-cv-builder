@@ -59,7 +59,9 @@ public sealed class AppState : IDisposable
     public string? LastOutputDirectory { get; private set; }
     public bool IsBusy { get; private set; }
     public string IssueFilter { get; set; } = "All";
-    public string CopyFeedback { get; private set; } = "";
+    public bool IsCopyArmed { get; private set; } = true;
+    public bool ShowCopyCheckIcon { get; private set; }
+    public IReadOnlyList<PlaceholderBinding> PlaceholderBindings { get; private set; } = Array.Empty<PlaceholderBinding>();
 
     public void Initialize(AppSettings settings, SettingsStore store, string templatesRoot)
     {
@@ -187,9 +189,11 @@ public sealed class AppState : IDisposable
 
     public void RefreshPreviewAndLiveValidation()
     {
+        JsonElement? root = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(JsonText) ? "{}" : JsonText);
+            root = doc.RootElement.Clone();
             OutputPreview = _folders.BuildPreviewPath(OutputRoot, doc.RootElement);
         }
         catch
@@ -204,6 +208,7 @@ public sealed class AppState : IDisposable
 
         JsonHighlightHtml = live.HighlightHtml;
         JsonMarks = live.Marks;
+        PlaceholderBindings = BuildPlaceholderBindings(root);
         if (!IsBusy)
         {
             Issues = live.Issues;
@@ -211,6 +216,101 @@ public sealed class AppState : IDisposable
                 ? GenerationStatus.Failed
                 : GenerationStatus.Ready;
         }
+    }
+
+    private IReadOnlyList<PlaceholderBinding> BuildPlaceholderBindings(JsonElement? root)
+    {
+        var resolver = new JsonPathResolver();
+        var list = new List<PlaceholderBinding>();
+
+        foreach (var p in Placeholders)
+        {
+            if (p.Kind is "array-start" or "array-end")
+            {
+                list.Add(new PlaceholderBinding(p, "marker", p.Kind == "array-start" ? "loop start" : "loop end"));
+                continue;
+            }
+
+            if (root is null)
+            {
+                list.Add(new PlaceholderBinding(p, "missing", "invalid JSON"));
+                continue;
+            }
+
+            var data = root.Value;
+
+            if (p.Kind == "loop-field" && !string.IsNullOrWhiteSpace(p.JsonPath))
+            {
+                var path = p.JsonPath;
+                var idx = path.IndexOf("_i.", StringComparison.Ordinal);
+                if (idx <= 0)
+                {
+                    list.Add(new PlaceholderBinding(p, "missing", "bad loop field"));
+                    continue;
+                }
+
+                var arrayPath = path[..idx];
+                var field = path[(idx + 3)..];
+                var items = resolver.GetArrayItems(data, arrayPath, out _, out var missing);
+                if (missing)
+                {
+                    list.Add(new PlaceholderBinding(p, "missing", $"no array '{arrayPath}'"));
+                    continue;
+                }
+
+                if (items.Count == 0)
+                {
+                    list.Add(new PlaceholderBinding(p, "empty", "array empty"));
+                    continue;
+                }
+
+                var values = new List<string>();
+                var anyMissing = false;
+                foreach (var item in items)
+                {
+                    if (resolver.TryResolveValue(item, field, out var v) && !string.IsNullOrWhiteSpace(v))
+                        values.Add(TrimPreview(v));
+                    else
+                        anyMissing = true;
+                }
+
+                if (values.Count == 0)
+                    list.Add(new PlaceholderBinding(p, "missing", $"no '{field}' in items"));
+                else if (anyMissing)
+                    list.Add(new PlaceholderBinding(p, "partial", string.Join(" · ", values.Take(3)) + (values.Count > 3 ? "…" : "")));
+                else
+                    list.Add(new PlaceholderBinding(p, "ok", string.Join(" · ", values.Take(3)) + (values.Count > 3 ? "…" : "")));
+                continue;
+            }
+
+            // simple field
+            var key = p.JsonPath ?? "";
+            if (string.IsNullOrWhiteSpace(key) || !resolver.TryGetElement(data, key, out var el))
+            {
+                list.Add(new PlaceholderBinding(p, "missing", "missing"));
+                continue;
+            }
+
+            if (resolver.TryResolveValue(data, key, out var value))
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    list.Add(new PlaceholderBinding(p, "empty", "empty"));
+                else
+                    list.Add(new PlaceholderBinding(p, "ok", TrimPreview(value)));
+            }
+            else
+            {
+                list.Add(new PlaceholderBinding(p, "missing", "missing"));
+            }
+        }
+
+        return list;
+    }
+
+    private static string TrimPreview(string value)
+    {
+        var oneLine = value.Replace("\r", " ").Replace("\n", " ").Trim();
+        return oneLine.Length <= 48 ? oneLine : oneLine[..45] + "…";
     }
 
     public void SetOutputRoot(string path)
@@ -365,6 +465,9 @@ public sealed class AppState : IDisposable
 
     public void CopyOutputDirectoryPath()
     {
+        if (!IsCopyArmed)
+            return;
+
         var path = !string.IsNullOrWhiteSpace(LastOutputDirectory)
             ? LastOutputDirectory
             : OutputPreview;
@@ -372,25 +475,26 @@ public sealed class AppState : IDisposable
         try
         {
             System.Windows.Clipboard.SetText(path);
-            CopyFeedback = "Copied";
+            IsCopyArmed = false;
+            ShowCopyCheckIcon = true;
+            Notify();
+            _ = ResetCopyButtonLater();
         }
         catch
         {
-            CopyFeedback = "Copy failed";
-        }
-
-        Notify();
-        _ = ClearCopyFeedbackLater();
-    }
-
-    private async Task ClearCopyFeedbackLater()
-    {
-        await Task.Delay(1500);
-        if (CopyFeedback is "Copied" or "Copy failed")
-        {
-            CopyFeedback = "";
+            // keep copy icon; no text toast
+            IsCopyArmed = true;
+            ShowCopyCheckIcon = false;
             Notify();
         }
+    }
+
+    private async Task ResetCopyButtonLater()
+    {
+        await Task.Delay(2000);
+        IsCopyArmed = true;
+        ShowCopyCheckIcon = false;
+        Notify();
     }
 
     public async Task GenerateAllAsync()
@@ -462,3 +566,8 @@ public sealed class AppState : IDisposable
         }
         """;
 }
+
+public sealed record PlaceholderBinding(
+    PlaceholderInfo Placeholder,
+    string State,   // ok | missing | empty | partial | marker
+    string Display);
