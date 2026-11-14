@@ -43,6 +43,10 @@ public sealed class DocxTemplateEngine
                     ProcessContainer(footer.Footer, footer, root, new Stack<LoopFrame>(), issues);
             }
 
+            // Expand theme font refs (minorHAnsi → Calibri, etc.) so PDF converters
+            // (especially LibreOffice) do not pick a different substitute face.
+            ThemeFontMaterializer.Materialize(doc);
+
             doc.MainDocumentPart.Document.Save();
         }
         catch (Exception ex)

@@ -143,13 +143,15 @@ public sealed class PdfConversionService
         Directory.CreateDirectory(outputDirectory);
         var resumePdf = Path.Combine(outputDirectory, "resume.pdf");
 
-        // Prefer Microsoft Word on Windows — it keeps DOCX fonts/styles most faithfully.
-        // Tests can set CVGEN_SKIP_WORD_PDF=1 to force the LibreOffice path.
+        // Prefer Microsoft Word on Windows — keeps DOCX fonts. Tests: CVGEN_SKIP_WORD_PDF=1
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
-            !IsWordPdfSkipped() &&
-            TryConvertWithWord(docxPath, resumePdf, issues))
+            !IsWordPdfSkipped())
         {
-            return resumePdf;
+            if (TryConvertWithWordCom(docxPath, resumePdf, issues))
+                return resumePdf;
+
+            if (TryConvertWithWordScript(docxPath, resumePdf, issues))
+                return resumePdf;
         }
 
         var exe = FindLibreOffice(libreOfficePath);
@@ -158,13 +160,13 @@ public sealed class PdfConversionService
             issues.Error(
                 "LibreOfficeMissing",
                 "Pdf",
-                "LibreOffice (soffice.exe) not found. Install from https://www.libreoffice.org/download/ or click “Set LibreOffice” and pick …\\LibreOffice\\program\\soffice.exe");
+                "LibreOffice (soffice.exe) not found. Install LibreOffice, or install Microsoft Word for best PDF font match.");
             return string.Empty;
         }
 
         try
         {
-            // PDF/A-2b embeds used fonts so the PDF does not silently remap faces.
+            // PDF/A-2b embeds the fonts LibreOffice actually used.
             const string pdfFilter =
                 "pdf:writer_pdf_Export:" +
                 "{" +
@@ -240,10 +242,10 @@ public sealed class PdfConversionService
                 File.Move(expected, resumePdf);
             }
 
-            issues.Info(
+            issues.Warning(
                 "PdfViaLibreOffice",
                 "Pdf",
-                "PDF exported via LibreOffice (PDF/A). For closest font match to Word, install the template’s fonts on this PC or install Microsoft Word.");
+                "PDF via LibreOffice. Fonts can still look different from Word (e.g. Calibri→Carlito) unless those exact fonts are installed. Install Microsoft Word for the closest match, or install the template fonts on this PC.");
 
             return resumePdf;
         }
@@ -260,11 +262,9 @@ public sealed class PdfConversionService
             "1",
             StringComparison.Ordinal);
 
-    /// <summary>
-    /// Uses late-bound Word COM when installed. Best font/style fidelity on Windows.
-    /// </summary>
+    /// <summary>Late-bound Word COM. BitmapMissingFonts=false embeds fonts instead of rasterizing.</summary>
     [SupportedOSPlatform("windows")]
-    private static bool TryConvertWithWord(string docxPath, string pdfPath, IssueCollector issues)
+    private static bool TryConvertWithWordCom(string docxPath, string pdfPath, IssueCollector issues)
     {
         object? wordApp = null;
         object? documents = null;
@@ -279,9 +279,8 @@ public sealed class PdfConversionService
             if (wordApp is null)
                 return false;
 
-            // Suppress UI prompts that can leave Word hanging / files locked.
             TrySet(wordApp, "Visible", false);
-            TrySet(wordApp, "DisplayAlerts", 0); // wdAlertsNone
+            TrySet(wordApp, "DisplayAlerts", 0);
             TrySet(wordApp, "ScreenUpdating", false);
 
             documents = wordApp.GetType().InvokeMember(
@@ -294,7 +293,6 @@ public sealed class PdfConversionService
             if (documents is null)
                 return false;
 
-            // Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, ...)
             doc = documents.GetType().InvokeMember(
                 "Open",
                 System.Reflection.BindingFlags.InvokeMethod,
@@ -308,42 +306,52 @@ public sealed class PdfConversionService
             if (File.Exists(pdfPath))
                 File.Delete(pdfPath);
 
-            // WdExportFormat.wdExportFormatPDF = 17
+            // ExportAsFixedFormat(
+            //   OutputFileName, ExportFormat=PDF(17), OpenAfterExport=false,
+            //   OptimizeFor=Print(0), Range=AllDocument(0), From, To, Item=DocumentContent(0),
+            //   IncludeDocProps=true, KeepIRM=true, CreateBookmarks=Heading(1),
+            //   DocStructureTags=true, BitmapMissingFonts=false, UseISO19005_1=false)
+            var missing = Type.Missing;
             doc.GetType().InvokeMember(
                 "ExportAsFixedFormat",
                 System.Reflection.BindingFlags.InvokeMethod,
                 null,
                 doc,
-                [pdfPath, 17]);
+                [
+                    pdfPath,
+                    17,      // wdExportFormatPDF
+                    false,   // OpenAfterExport
+                    0,       // wdExportOptimizeForPrint
+                    0,       // wdExportAllDocument
+                    missing, // From
+                    missing, // To
+                    0,       // wdExportDocumentContent
+                    true,    // IncludeDocProps
+                    true,    // KeepIRM
+                    1,       // wdExportCreateHeadingBookmarks
+                    true,    // DocStructureTags
+                    false,   // BitmapMissingFonts — embed fonts, don't draw bitmaps
+                    false    // UseISO19005_1
+                ]);
 
             if (!File.Exists(pdfPath))
                 return false;
 
-            issues.Info("PdfViaWord", "Pdf", "PDF exported via Microsoft Word (best font match to the DOCX).");
+            issues.Info("PdfViaWord", "Pdf", "PDF exported via Microsoft Word (fonts match the DOCX).");
             return true;
         }
         catch (Exception ex)
         {
             issues.Info(
-                "WordPdfUnavailable",
+                "WordComUnavailable",
                 "Pdf",
-                "Microsoft Word PDF export unavailable — falling back to LibreOffice.",
+                "Word COM PDF export unavailable — trying script fallback / LibreOffice.",
                 detail: ex.Message);
-            try
-            {
-                if (File.Exists(pdfPath))
-                    File.Delete(pdfPath);
-            }
-            catch
-            {
-                // ignore
-            }
-
+            TryDelete(pdfPath);
             return false;
         }
         finally
         {
-            // wdDoNotSaveChanges = 0 — must close before Quit or resume.docx stays locked.
             TryCom(doc, "Close", [0]);
             TryCom(wordApp, "Quit", [0]);
             ReleaseCom(ref doc);
@@ -352,6 +360,114 @@ public sealed class PdfConversionService
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+        }
+    }
+
+    /// <summary>
+    /// cscript CreateObject often finds Click-to-Run Word when in-process COM does not
+    /// (32/64-bit mismatch). Tries System32 and SysWOW64 cscript.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static bool TryConvertWithWordScript(string docxPath, string pdfPath, IssueCollector issues)
+    {
+        var scriptPath = Path.Combine(Path.GetTempPath(), "cvgen-word-pdf-" + Guid.NewGuid().ToString("N") + ".vbs");
+        try
+        {
+            if (File.Exists(pdfPath))
+                File.Delete(pdfPath);
+
+            var docxEsc = EscapeVbs(docxPath);
+            var pdfEsc = EscapeVbs(pdfPath);
+            var script = $$"""
+                On Error Resume Next
+                Dim w, d
+                Set w = CreateObject("Word.Application")
+                If Err.Number <> 0 Or w Is Nothing Then
+                  WScript.Quit 2
+                End If
+                w.Visible = False
+                w.DisplayAlerts = 0
+                Set d = w.Documents.Open("{{docxEsc}}", False, True, False)
+                If Err.Number <> 0 Or d Is Nothing Then
+                  w.Quit 0
+                  WScript.Quit 3
+                End If
+                d.ExportAsFixedFormat "{{pdfEsc}}", 17, False, 0, 0, , , 0, True, True, 1, True, False, False
+                If Err.Number <> 0 Then
+                  d.Close 0
+                  w.Quit 0
+                  WScript.Quit 4
+                End If
+                d.Close 0
+                w.Quit 0
+                WScript.Quit 0
+                """;
+            File.WriteAllText(scriptPath, script, Encoding.ASCII);
+
+            foreach (var cscript in EnumerateCscriptHosts())
+            {
+                TryDelete(pdfPath);
+                var psi = new ProcessStartInfo
+                {
+                    FileName = cscript,
+                    ArgumentList = { "//nologo", scriptPath },
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using var process = Process.Start(psi);
+                if (process is null)
+                    continue;
+
+                if (!process.WaitForExit(120_000))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                    continue;
+                }
+
+                if (process.ExitCode == 0 && File.Exists(pdfPath))
+                {
+                    issues.Info("PdfViaWordScript", "Pdf", "PDF exported via Microsoft Word script (fonts match the DOCX).");
+                    return true;
+                }
+            }
+
+            issues.Info("WordScriptUnavailable", "Pdf", "Word script PDF export failed — falling back to LibreOffice.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            issues.Info("WordScriptUnavailable", "Pdf", "Word script PDF export failed — falling back to LibreOffice.", detail: ex.Message);
+            return false;
+        }
+        finally
+        {
+            TryDelete(scriptPath);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateCscriptHosts()
+    {
+        var windir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        yield return Path.Combine(windir, "System32", "cscript.exe");
+        yield return Path.Combine(windir, "SysWOW64", "cscript.exe");
+    }
+
+    private static string EscapeVbs(string path)
+        => path.Replace("\"", "\"\"", StringComparison.Ordinal);
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // ignore
         }
     }
 
