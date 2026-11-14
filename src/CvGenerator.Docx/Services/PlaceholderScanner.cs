@@ -31,8 +31,7 @@ public sealed class PlaceholderScanner
 
             var inner = m.Groups[1].Value.Trim();
 
-            if (PlaceholderPatterns.IsArrayStart(raw, out var startName) ||
-                PlaceholderPatterns.ArrayStart().IsMatch(raw))
+            if (PlaceholderPatterns.ArrayStart().IsMatch(raw))
             {
                 var name = PlaceholderPatterns.ArrayStart().Match(raw).Groups[1].Value;
                 results.Add(new PlaceholderInfo { Token = raw, Kind = "array-start", JsonPath = name });
@@ -46,13 +45,13 @@ public sealed class PlaceholderScanner
                 continue;
             }
 
-            if (PlaceholderPatterns.IsLoopField(inner, out var arrayName, out var field))
+            if (PlaceholderPatterns.TryParseLoopReference(inner, out _))
             {
                 results.Add(new PlaceholderInfo
                 {
                     Token = raw,
                     Kind = "loop-field",
-                    JsonPath = $"{arrayName}_i.{field}"
+                    JsonPath = inner
                 });
                 continue;
             }

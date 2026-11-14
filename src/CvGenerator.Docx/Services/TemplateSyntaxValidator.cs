@@ -37,7 +37,7 @@ public sealed partial class TemplateSyntaxValidator
         var issues = new IssueCollector();
         var starts = new List<(string Name, string Token)>();
         var ends = new List<(string Name, string Token)>();
-        var loopFields = new List<(string Array, string Token)>();
+        var loopFields = new List<(LoopReference Ref, string Token)>();
 
         foreach (Match match in PlaceholderPatterns.AnyPlaceholder().Matches(text ?? string.Empty))
         {
@@ -59,11 +59,10 @@ public sealed partial class TemplateSyntaxValidator
             if (PlaceholderPatterns.ArrayStart().IsMatch(token))
             {
                 var name = PlaceholderPatterns.ArrayStart().Match(token).Groups[1].Value;
-                var parts = inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2)
+                if (!PlaceholderPatterns.TryParseQualifiedArrayName(name, out _, out _))
                 {
                     issues.Error("InvalidArrayStart", "Template",
-                        $"ArrayStart must be `${{ArrayStart name}}`: {token}", token);
+                        $"Invalid ArrayStart name '{name}'. Use `skills` or `skills_i.detail`.", token);
                 }
                 else
                 {
@@ -76,23 +75,13 @@ public sealed partial class TemplateSyntaxValidator
             if (PlaceholderPatterns.ArrayEnd().IsMatch(token))
             {
                 var name = PlaceholderPatterns.ArrayEnd().Match(token).Groups[1].Value;
-                var parts = inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2)
-                {
-                    issues.Error("InvalidArrayEnd", "Template",
-                        $"ArrayEnd must be `${{ArrayEnd name}}`: {token}", token);
-                }
-                else
-                {
-                    ends.Add((name, token));
-                }
-
+                ends.Add((name, token));
                 continue;
             }
 
-            if (PlaceholderPatterns.IsLoopField(inner, out var arrayName, out _))
+            if (PlaceholderPatterns.TryParseLoopReference(inner, out var loopRef))
             {
-                loopFields.Add((arrayName, token));
+                loopFields.Add((loopRef, token));
                 continue;
             }
 
@@ -107,13 +96,12 @@ public sealed partial class TemplateSyntaxValidator
             if (SimplePathRegex().IsMatch(inner))
                 continue;
 
-            // Legacy .i. form
             if (inner.Contains(".i.", StringComparison.Ordinal))
             {
                 issues.Error(
                     "LegacyLoopField",
                     "Template",
-                    $"Use ${{arrayname_i.field}} instead of ${{arrayname.i.field}}: {token}",
+                    $"Use ${{array_i.field}} / ${{parent_i.child_i.field}} instead of .i. form: {token}",
                     token);
                 continue;
             }
@@ -121,7 +109,7 @@ public sealed partial class TemplateSyntaxValidator
             issues.Error(
                 "InvalidPlaceholder",
                 "Template",
-                $"Invalid placeholder: {token}. Use ${{path}}, ${{ArrayStart name}}, ${{ArrayEnd name}}, or ${{name_i.field}}.",
+                $"Invalid placeholder: {token}.",
                 token);
         }
 
@@ -155,12 +143,27 @@ public sealed partial class TemplateSyntaxValidator
             }
         }
 
-        foreach (var (array, token) in loopFields)
+        foreach (var (loopRef, token) in loopFields)
         {
-            if (!startCounts.ContainsKey(array))
+            // Outer array of the chain should appear as some ArrayStart local or qualified name.
+            var outer = loopRef.Chain[0];
+            var hasStart = startCounts.Keys.Any(k =>
+                k.Equals(outer, StringComparison.OrdinalIgnoreCase) ||
+                k.StartsWith(outer + "_i.", StringComparison.OrdinalIgnoreCase) ||
+                k.EndsWith("." + outer, StringComparison.OrdinalIgnoreCase) ||
+                // qualified start skills_i.detail implies skills exists as parent start
+                (PlaceholderPatterns.TryParseQualifiedArrayName(k, out var parents, out var prop) &&
+                 (parents.Contains(outer, StringComparer.OrdinalIgnoreCase) ||
+                  prop.Equals(outer, StringComparison.OrdinalIgnoreCase) ||
+                  parents.Count == 0 && prop.Equals(outer, StringComparison.OrdinalIgnoreCase))));
+
+            // Also: ArrayStart skills covers skills_i.*
+            hasStart = hasStart || startCounts.ContainsKey(outer);
+
+            if (!hasStart)
             {
                 issues.Warning("OrphanLoopField", "Template",
-                    $"Loop field {token} has no matching ${{ArrayStart {array}}}.", token);
+                    $"Loop field {token} may have no matching ArrayStart for '{outer}'.", token);
             }
         }
 

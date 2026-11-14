@@ -579,6 +579,78 @@ button, input, select, textarea {
   font-size: 0.9rem;
 }
 
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(16, 24, 32, 0.45);
+  backdrop-filter: blur(3px);
+  animation: helpIn 160ms ease-out;
+}
+
+@keyframes helpIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.help-dialog {
+  width: min(720px, 100%);
+  max-height: min(86vh, 900px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: 0 24px 60px rgba(16, 24, 32, 0.28);
+  overflow: hidden;
+}
+
+.help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.help-title {
+  font-family: var(--display);
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.help-header-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.help-body {
+  margin: 0;
+  padding: 1rem 1.1rem 1.25rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+  background:
+    linear-gradient(180deg, #fbfcfb 0%, #f5f8f7 100%);
+}
+
 @media (max-width: 960px) {
   .workspace {
     grid-template-columns: 1fr;

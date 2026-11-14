@@ -20,7 +20,7 @@ internal static class RunTextMerger
 
     /// <summary>
     /// Replace each ${...} using <paramref name="replaceInner"/>.
-    /// JSON values may include **bold** and [label](url) markup.
+    /// JSON values may include **bold**, *italic*, __underline__, and [label](url) markup.
     /// </summary>
     public static void ReplacePlaceholders(
         Paragraph paragraph,
@@ -199,30 +199,31 @@ internal static class RunTextMerger
             {
                 var rel = part.AddHyperlinkRelationship(uri, true);
                 var hyperlink = new Hyperlink { Id = rel.Id };
-                var run = CreateRun(segment.Text.Replace("**", ""), baseProps, bold: segment.Text.Contains("**", StringComparison.Ordinal));
+                var run = CreateRun(segment.Text, baseProps, RichSegmentKind.Text);
                 EnsureHyperlinkStyle(run.RunProperties ??= new RunProperties());
                 hyperlink.AppendChild(run);
                 nodes.Add(hyperlink);
                 continue;
             }
 
-            nodes.Add(CreateRun(
-                segment.Text,
-                baseProps,
-                bold: segment.Kind == RichSegmentKind.Bold));
+            nodes.Add(CreateRun(segment.Text, baseProps, segment.Kind));
         }
 
         return nodes;
     }
 
-    private static Run CreateRun(string text, RunProperties? baseProps, bool bold)
+    private static Run CreateRun(string text, RunProperties? baseProps, RichSegmentKind kind)
     {
         var run = new Run();
         var props = baseProps != null
             ? (RunProperties)baseProps.CloneNode(true)
             : new RunProperties();
-        if (bold)
+        if (kind == RichSegmentKind.Bold)
             props.Bold ??= new Bold();
+        if (kind == RichSegmentKind.Italic)
+            props.Italic ??= new Italic();
+        if (kind == RichSegmentKind.Underline)
+            props.Underline ??= new Underline { Val = UnderlineValues.Single };
         if (props.ChildElements.Count > 0)
             run.RunProperties = props;
         run.AppendChild(new Text(text) { Space = SpaceProcessingModeValues.Preserve });

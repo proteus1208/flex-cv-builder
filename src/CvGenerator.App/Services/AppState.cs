@@ -241,45 +241,7 @@ public sealed class AppState : IDisposable
 
             if (p.Kind == "loop-field" && !string.IsNullOrWhiteSpace(p.JsonPath))
             {
-                var path = p.JsonPath;
-                var idx = path.IndexOf("_i.", StringComparison.Ordinal);
-                if (idx <= 0)
-                {
-                    list.Add(new PlaceholderBinding(p, "missing", "bad loop field"));
-                    continue;
-                }
-
-                var arrayPath = path[..idx];
-                var field = path[(idx + 3)..];
-                var items = resolver.GetArrayItems(data, arrayPath, out _, out var missing);
-                if (missing)
-                {
-                    list.Add(new PlaceholderBinding(p, "missing", $"no array '{arrayPath}'"));
-                    continue;
-                }
-
-                if (items.Count == 0)
-                {
-                    list.Add(new PlaceholderBinding(p, "empty", "array empty"));
-                    continue;
-                }
-
-                var values = new List<string>();
-                var anyMissing = false;
-                foreach (var item in items)
-                {
-                    if (resolver.TryResolveValue(item, field, out var v) && !string.IsNullOrWhiteSpace(v))
-                        values.Add(TrimPreview(v));
-                    else
-                        anyMissing = true;
-                }
-
-                if (values.Count == 0)
-                    list.Add(new PlaceholderBinding(p, "missing", $"no '{field}' in items"));
-                else if (anyMissing)
-                    list.Add(new PlaceholderBinding(p, "partial", string.Join(" · ", values.Take(3)) + (values.Count > 3 ? "…" : "")));
-                else
-                    list.Add(new PlaceholderBinding(p, "ok", string.Join(" · ", values.Take(3)) + (values.Count > 3 ? "…" : "")));
+                list.Add(BindLoopField(p, data, resolver));
                 continue;
             }
 
@@ -305,6 +267,85 @@ public sealed class AppState : IDisposable
         }
 
         return list;
+    }
+
+    private static PlaceholderBinding BindLoopField(PlaceholderInfo p, JsonElement root, JsonPathResolver resolver)
+    {
+        // skills_i.category | skills_i.detail_i | skills_i.detail_i.name
+        if (!TrySplitLoopPath(p.JsonPath!, out var chain, out var field))
+            return new PlaceholderBinding(p, "missing", "bad loop field");
+
+        if (!resolver.TryGetElement(root, chain[0], out var cursor) || cursor.ValueKind != JsonValueKind.Array)
+            return new PlaceholderBinding(p, "missing", $"no array '{chain[0]}'");
+
+        var levelItems = cursor.EnumerateArray().ToList();
+        if (levelItems.Count == 0)
+            return new PlaceholderBinding(p, "empty", "array empty");
+
+        // Descend parent arrays using the first item at each level; sample the innermost array.
+        var focus = levelItems[0];
+        for (var i = 1; i < chain.Count; i++)
+        {
+            if (!resolver.TryGetElement(focus, chain[i], out var next) || next.ValueKind != JsonValueKind.Array)
+                return new PlaceholderBinding(p, "missing", $"no nested '{chain[i]}'");
+
+            levelItems = next.EnumerateArray().ToList();
+            if (levelItems.Count == 0)
+                return new PlaceholderBinding(p, "empty", $"'{chain[i]}' empty");
+
+            focus = levelItems[0];
+        }
+
+        var values = new List<string>();
+        var anyMissing = false;
+        foreach (var item in levelItems.Take(5))
+        {
+            if (string.IsNullOrEmpty(field))
+            {
+                var scalar = item.ValueKind == JsonValueKind.String ? item.GetString() : item.ToString();
+                if (string.IsNullOrWhiteSpace(scalar)) anyMissing = true;
+                else values.Add(TrimPreview(scalar!));
+            }
+            else if (resolver.TryResolveValue(item, field, out var v) && !string.IsNullOrWhiteSpace(v))
+                values.Add(TrimPreview(v));
+            else
+                anyMissing = true;
+        }
+
+        if (values.Count == 0)
+            return new PlaceholderBinding(p, "missing", string.IsNullOrEmpty(field) ? "no values" : $"no '{field}'");
+        if (anyMissing)
+            return new PlaceholderBinding(p, "partial", string.Join(" · ", values) + (levelItems.Count > 5 ? "…" : ""));
+        return new PlaceholderBinding(p, "ok", string.Join(" · ", values) + (levelItems.Count > 5 ? "…" : ""));
+    }
+
+    private static bool TrySplitLoopPath(string path, out List<string> chain, out string? field)
+    {
+        chain = new List<string>();
+        field = null;
+        var s = path.Trim();
+        var i = 0;
+        while (i < s.Length)
+        {
+            var idx = s.IndexOf("_i", i, StringComparison.Ordinal);
+            if (idx < 0)
+                break;
+            chain.Add(s[i..idx]);
+            i = idx + 2;
+            if (i < s.Length && s[i] == '.')
+                i++;
+            else if (i >= s.Length)
+                return chain.Count > 0;
+            else
+                break;
+        }
+
+        if (chain.Count == 0)
+            return false;
+        field = i < s.Length ? s[i..] : null;
+        if (string.IsNullOrEmpty(field))
+            field = null;
+        return true;
     }
 
     private static string TrimPreview(string value)

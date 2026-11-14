@@ -6,6 +6,8 @@ internal enum RichSegmentKind
 {
     Text,
     Bold,
+    Italic,
+    Underline,
     Link
 }
 
@@ -13,12 +15,13 @@ internal sealed record RichSegment(RichSegmentKind Kind, string Text, string? Ur
 
 /// <summary>
 /// Lightweight markup inside JSON string values:
-///   **bold text**
+///   **bold**  *italic*  __underline__
 ///   [label](https://example.com)
 /// </summary>
 internal static partial class RichTextMarkup
 {
-    [GeneratedRegex(@"\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)]+)\)")]
+    // Longest delimiters first so ** wins over * and __ is unambiguous.
+    [GeneratedRegex(@"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|\[([^\]]+)\]\(([^)]+)\)")]
     private static partial Regex TokenRegex();
 
     public static bool ContainsMarkup(string? value)
@@ -37,15 +40,17 @@ internal static partial class RichTextMarkup
                 segments.Add(new RichSegment(RichSegmentKind.Text, value[index..match.Index]));
 
             if (match.Groups[1].Success)
-            {
                 segments.Add(new RichSegment(RichSegmentKind.Bold, match.Groups[1].Value));
-            }
+            else if (match.Groups[2].Success)
+                segments.Add(new RichSegment(RichSegmentKind.Underline, match.Groups[2].Value));
+            else if (match.Groups[3].Success)
+                segments.Add(new RichSegment(RichSegmentKind.Italic, match.Groups[3].Value));
             else
             {
                 segments.Add(new RichSegment(
                     RichSegmentKind.Link,
-                    match.Groups[2].Value,
-                    match.Groups[3].Value.Trim()));
+                    match.Groups[4].Value,
+                    match.Groups[5].Value.Trim()));
             }
 
             index = match.Index + match.Length;

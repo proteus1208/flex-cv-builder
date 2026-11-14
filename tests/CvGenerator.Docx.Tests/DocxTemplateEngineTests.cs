@@ -134,6 +134,70 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void Parent_qualified_nested_ArrayStart_expands_object_and_scalar_items()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skills}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${skills_i.category}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skills_i.detail}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("- ${skills_i.detail_i.name} (${skills_i.detail_i.level})"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skills_i.detail}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skills_i.tags}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("#${skills_i.tags_i}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skills_i.tags}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skills}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "skills": [
+                {
+                  "category": "Backend",
+                  "detail": [
+                    {"name":"C#","level":"expert"},
+                    {"name":"SQL","level":"solid"}
+                  ],
+                  "tags": ["api", "dotnet"]
+                },
+                {
+                  "category": "Frontend",
+                  "detail": [
+                    {"name":"React","level":"strong"}
+                  ],
+                  "tags": ["ui"]
+                }
+              ]
+            }
+            """);
+            var issues = new IssueCollector();
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, issues);
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Backend", text);
+            Assert.Contains("C# (expert)", text);
+            Assert.Contains("SQL (solid)", text);
+            Assert.Contains("#api", text);
+            Assert.Contains("#dotnet", text);
+            Assert.Contains("Frontend", text);
+            Assert.Contains("React (strong)", text);
+            Assert.Contains("#ui", text);
+            Assert.DoesNotContain("ArrayStart", text);
+            Assert.DoesNotContain("skills_i", text);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
     public void Unresolved_placeholders_become_warnings()
     {
         var template = CreateTempDocx(doc =>

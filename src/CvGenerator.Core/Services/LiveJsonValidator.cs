@@ -76,11 +76,11 @@ public sealed class LiveJsonValidator
 
                     case "array-start":
                     case "loop-start":
-                        ValidateArray(root, p.JsonPath, p.Token, issues, marks);
+                        ValidateArrayStart(root, p.JsonPath!, p.Token, issues, marks);
                         break;
 
                     case "loop-field":
-                        ValidateLoopField(root, p.JsonPath, p.Token, issues, marks);
+                        ValidateLoopField(root, p.JsonPath!, p.Token, issues, marks);
                         break;
                 }
             }
@@ -113,27 +113,103 @@ public sealed class LiveJsonValidator
         };
     }
 
-    private void ValidateArray(
+    private void ValidateArrayStart(
         JsonElement root,
-        string arrayPath,
+        string arrayToken,
         string token,
         IssueCollector issues,
         List<JsonMark> marks)
     {
-        var items = _paths.GetArrayItems(root, arrayPath, out _, out var missing);
-        if (missing)
+        // skills → root.skills ; skills_i.detail → sample skills[0].detail
+        if (!arrayToken.Contains("_i.", StringComparison.Ordinal))
+        {
+            var items = _paths.GetArrayItems(root, arrayToken, out _, out var missing);
+            if (missing)
+            {
+                issues.Warning("MissingLoopArray", "ResolvePaths",
+                    $"Template array '{arrayToken}' ({token}) not found in JSON — section will be empty.",
+                    arrayToken);
+                marks.Add(new JsonMark(arrayToken, IssueSeverity.Warning, "missing"));
+            }
+            else if (items.Count == 0)
+            {
+                issues.Warning("EmptyLoopArray", "ResolvePaths",
+                    $"JSON array '{arrayToken}' is empty — section will be empty.",
+                    arrayToken);
+                marks.Add(new JsonMark(arrayToken, IssueSeverity.Warning, "empty"));
+            }
+
+            return;
+        }
+
+        if (!TrySplitLoopPath(arrayToken, out var chain, out var property) ||
+            string.IsNullOrEmpty(property) ||
+            property.Contains('.'))
+        {
+            return;
+        }
+
+        if (!_paths.TryGetElement(root, chain[0], out var cursor) || cursor.ValueKind != JsonValueKind.Array)
         {
             issues.Warning("MissingLoopArray", "ResolvePaths",
-                $"Template array '{arrayPath}' ({token}) not found in JSON — section will be empty.",
-                arrayPath);
-            marks.Add(new JsonMark(arrayPath, IssueSeverity.Warning, "missing"));
+                $"Template array '{arrayToken}' needs '{chain[0]}' which is missing in JSON.",
+                chain[0]);
+            marks.Add(new JsonMark(chain[0], IssueSeverity.Warning, "missing"));
+            return;
         }
-        else if (items.Count == 0)
+
+        var level = cursor.EnumerateArray().ToList();
+        if (level.Count == 0)
         {
             issues.Warning("EmptyLoopArray", "ResolvePaths",
-                $"JSON array '{arrayPath}' is empty — section will be empty.",
-                arrayPath);
-            marks.Add(new JsonMark(arrayPath, IssueSeverity.Warning, "empty"));
+                $"JSON array '{chain[0]}' is empty — section will be empty.",
+                chain[0]);
+            marks.Add(new JsonMark(chain[0], IssueSeverity.Warning, "empty"));
+            return;
+        }
+
+        var parentItem = level[0];
+        for (var c = 1; c < chain.Count; c++)
+        {
+            if (!_paths.TryGetElement(parentItem, chain[c], out var next) || next.ValueKind != JsonValueKind.Array)
+            {
+                var path = string.Join(".", chain.Take(c + 1));
+                issues.Warning("MissingLoopArray", "ResolvePaths",
+                    $"Nested array '{chain[c]}' missing for {token}.",
+                    path);
+                marks.Add(new JsonMark(path, IssueSeverity.Warning, "missing"));
+                return;
+            }
+
+            level = next.EnumerateArray().ToList();
+            if (level.Count == 0)
+            {
+                var path = string.Join(".", chain.Take(c + 1));
+                issues.Warning("EmptyLoopArray", "ResolvePaths",
+                    $"JSON array '{path}' is empty — section will be empty.",
+                    path);
+                marks.Add(new JsonMark(path, IssueSeverity.Warning, "empty"));
+                return;
+            }
+
+            parentItem = level[0];
+        }
+
+        var markPath = $"{chain[0]}[0].{property}";
+        if (!_paths.TryGetElement(parentItem, property, out var child) ||
+            (child.ValueKind is not JsonValueKind.Array and not JsonValueKind.Object))
+        {
+            issues.Warning("MissingLoopArray", "ResolvePaths",
+                $"Template array '{arrayToken}' ({token}) not found under {chain[0]}[0].",
+                markPath);
+            marks.Add(new JsonMark(markPath, IssueSeverity.Warning, "missing"));
+        }
+        else if (child.ValueKind == JsonValueKind.Array && !child.EnumerateArray().Any())
+        {
+            issues.Warning("EmptyLoopArray", "ResolvePaths",
+                $"JSON array for '{arrayToken}' is empty — section will be empty.",
+                markPath);
+            marks.Add(new JsonMark(markPath, IssueSeverity.Warning, "empty"));
         }
     }
 
@@ -144,38 +220,116 @@ public sealed class LiveJsonValidator
         IssueCollector issues,
         List<JsonMark> marks)
     {
-        // experience_i.title
-        var idx = jsonPath.IndexOf("_i.", StringComparison.Ordinal);
-        if (idx <= 0)
+        // skills_i.category | skills_i.detail_i | skills_i.detail_i.name
+        if (!TrySplitLoopPath(jsonPath, out var chain, out var field))
             return;
 
-        var arrayPath = jsonPath[..idx];
-        var field = jsonPath[(idx + 3)..];
-        var items = _paths.GetArrayItems(root, arrayPath, out _, out var missing);
-        if (missing)
+        if (!_paths.TryGetElement(root, chain[0], out var cursor) || cursor.ValueKind != JsonValueKind.Array)
         {
             issues.Warning("MissingLoopArray", "ResolvePaths",
-                $"Template field {token} needs array '{arrayPath}' which is missing in JSON.",
-                arrayPath);
-            marks.Add(new JsonMark(arrayPath, IssueSeverity.Warning, "missing"));
+                $"Template field {token} needs array '{chain[0]}' which is missing in JSON.",
+                chain[0]);
+            marks.Add(new JsonMark(chain[0], IssueSeverity.Warning, "missing"));
             return;
         }
 
+        var items = cursor.EnumerateArray().ToList();
         if (items.Count == 0)
             return;
 
-        for (var i = 0; i < items.Count; i++)
+        // Only deep-check first level thoroughly; nested chains sample first parent item.
+        if (chain.Count == 1)
         {
-            if (!_paths.TryGetElement(items[i], field, out var el) || IsEmpty(el))
+            for (var i = 0; i < items.Count; i++)
             {
-                var markPath = $"{arrayPath}[{i}].{field}";
-                issues.Warning("MissingLoopField", "ResolvePaths",
-                    $"Missing/empty '{field}' in {arrayPath}[{i}] for {token}.",
-                    markPath);
-                // Do NOT mark bare leaf "field" — that wrongly highlights other keys.
-                marks.Add(new JsonMark(markPath, IssueSeverity.Warning, "empty"));
+                if (string.IsNullOrEmpty(field))
+                    continue;
+
+                if (!_paths.TryGetElement(items[i], field, out var el) || IsEmpty(el))
+                {
+                    var markPath = $"{chain[0]}[{i}].{field}";
+                    issues.Warning("MissingLoopField", "ResolvePaths",
+                        $"Missing/empty '{field}' in {chain[0]}[{i}] for {token}.",
+                        markPath);
+                    marks.Add(new JsonMark(markPath, IssueSeverity.Warning, "empty"));
+                }
             }
+
+            return;
         }
+
+        // Nested: skills_i.detail_i.name — check under first skill item for detail array
+        var parentItem = items[0];
+        for (var c = 1; c < chain.Count; c++)
+        {
+            if (!_paths.TryGetElement(parentItem, chain[c], out var next) || next.ValueKind != JsonValueKind.Array)
+            {
+                var path = string.Join(".", chain.Take(c + 1));
+                issues.Warning("MissingLoopArray", "ResolvePaths",
+                    $"Nested array '{chain[c]}' missing for {token}.",
+                    path);
+                marks.Add(new JsonMark(path, IssueSeverity.Warning, "missing"));
+                return;
+            }
+
+            var nested = next.EnumerateArray().ToList();
+            if (nested.Count == 0)
+                return;
+
+            if (c == chain.Count - 1)
+            {
+                if (string.IsNullOrEmpty(field))
+                    return; // scalar items OK if array exists
+
+                for (var i = 0; i < nested.Count; i++)
+                {
+                    if (!_paths.TryGetElement(nested[i], field, out var el) || IsEmpty(el))
+                    {
+                        var markPath = $"{chain[0]}[0].{chain[c]}[{i}].{field}";
+                        issues.Warning("MissingLoopField", "ResolvePaths",
+                            $"Missing/empty '{field}' for {token}.",
+                            markPath);
+                        marks.Add(new JsonMark(markPath, IssueSeverity.Warning, "empty"));
+                    }
+                }
+
+                return;
+            }
+
+            parentItem = nested[0];
+        }
+    }
+
+    private static bool TrySplitLoopPath(string path, out List<string> chain, out string? field)
+    {
+        chain = new List<string>();
+        field = null;
+        var s = path.Trim();
+        var i = 0;
+        while (i < s.Length)
+        {
+            var idx = s.IndexOf("_i", i, StringComparison.Ordinal);
+            if (idx < 0)
+                break;
+            chain.Add(s[i..idx]);
+            i = idx + 2;
+            if (i < s.Length && s[i] == '.')
+                i++;
+            else if (i >= s.Length)
+            {
+                field = null;
+                return chain.Count > 0;
+            }
+            else
+                break;
+        }
+
+        if (chain.Count == 0)
+            return false;
+        field = i < s.Length ? s[i..] : null;
+        if (string.IsNullOrEmpty(field))
+            field = null;
+        return true;
     }
 
     private static LiveValidationResult Result(

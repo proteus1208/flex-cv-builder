@@ -31,8 +31,10 @@ The output root is remembered in `%AppData%/CvGenerator/settings.json`.
 | `${name}` / `${linkedin}` | JSON field (dotted paths supported) |
 | `${ArrayStart experience}` … `${ArrayEnd experience}` | Repeat everything between (paragraphs, tables, images) for each array item |
 | `${experience_i.title}` | Field on the current loop item (`arrayname_i.field`) |
+| `${ArrayStart skills_i.detail}` … `${ArrayEnd skills_i.detail}` | Nested loop under the parent `skills` item (preferred naming) |
+| `${skills_i.detail_i.name}` / `${skills_i.detail_i}` | Nested item field, or the scalar value when the array holds strings |
 
-Nested loops are supported (ArrayStart/ArrayEnd inside another block). Template styles (font, color, alignment, borders) are preserved; only placeholder text is replaced.
+Nested loops are supported. Prefer **parent-qualified** names (`skills_i.detail`) so nested starts match your JSON clearly; relative names (`${ArrayStart detail}` inside a skills loop) still work. Template styles (font, color, alignment, borders) are preserved; only placeholder text is replaced.
 
 Example:
 
@@ -48,25 +50,53 @@ ${experience_i.title} — ${experience_i.company}
 ${ArrayEnd experience}
 ```
 
-## Bold and hyperlinks inside JSON values
+Nested (parent-qualified):
+
+```json
+"skills": [
+  {
+    "category": "Backend",
+    "detail": [
+      { "name": "C#", "level": "expert" }
+    ],
+    "tags": ["api", "dotnet"]
+  }
+]
+```
+
+```text
+${ArrayStart skills}
+${skills_i.category}
+${ArrayStart skills_i.detail}
+- ${skills_i.detail_i.name} (${skills_i.detail_i.level})
+${ArrayEnd skills_i.detail}
+${ArrayStart skills_i.tags}
+#${skills_i.tags_i}
+${ArrayEnd skills_i.tags}
+${ArrayEnd skills}
+```
+
+## Rich text inside JSON values
 
 Use lightweight markup in string fields:
 
 | Markup | Result |
 | --- | --- |
 | `**text**` | Bold |
+| `*text*` | Italic |
+| `__text__` | Underline |
 | `[label](https://example.com)` | Clickable hyperlink |
 
 ```json
 {
-  "summary": "Shipped **PDF** export and **DOCX** merge",
+  "summary": "Shipped **PDF** export with *fast* __preview__",
   "linkedin": "[Cody Lee Berry](https://linkedin.com/in/example)"
 }
 ```
 
-Template tip: you can also make the whole `${placeholder}` bold/colored in Word — that style is kept as the base, and `**...**` / links add on top.
+Template tip: you can also style the whole `${placeholder}` in Word — that style is kept as the base, and these markers add on top.
 
-Links must be `http`, `https`, or `mailto`.
+Links must be `http`, `https`, or `mailto`. The in-app **Help** button has a selectable / copyable full grammar reference.
 
 ## Scripts
 

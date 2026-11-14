@@ -35,4 +35,20 @@ public class TemplateSyntaxValidatorTests
             """);
         Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
     }
+
+    [Fact]
+    public void Accepts_parent_qualified_nested_loops()
+    {
+        var issues = _sut.ValidateText("""
+            ${ArrayStart skills}
+            ${skills_i.category}
+            ${ArrayStart skills_i.detail}
+            ${skills_i.detail_i.name}
+            ${skills_i.detail_i}
+            ${ArrayEnd skills_i.detail}
+            ${ArrayEnd skills}
+            """);
+        Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
+        Assert.DoesNotContain(issues, i => i.Code == "OrphanLoopField");
+    }
 }

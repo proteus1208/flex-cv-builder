@@ -49,4 +49,52 @@ public class LiveJsonValidatorTests
         // Root "title" should not be warn-marked just because array item lacks title.
         Assert.DoesNotContain("json-mark warn\">&quot;title&quot;", result.HighlightHtml);
     }
+
+    [Fact]
+    public void Validates_parent_qualified_nested_ArrayStart()
+    {
+        var sut = new LiveJsonValidator();
+        var result = sut.Validate(
+            """
+            {
+              "name": "Ada",
+              "role": "Eng",
+              "topSkills": ["C#"],
+              "skills": [
+                { "category": "Backend", "detail": [ { "name": "C#" } ] }
+              ]
+            }
+            """,
+            new (string Kind, string? JsonPath, string Token)[]
+            {
+                ("array-start", "skills", "${ArrayStart skills}"),
+                ("array-start", "skills_i.detail", "${ArrayStart skills_i.detail}"),
+                ("loop-field", "skills_i.detail_i.name", "${skills_i.detail_i.name}")
+            },
+            Array.Empty<GenerationIssue>());
+
+        Assert.DoesNotContain(result.Issues, i => i.Code is "MissingLoopArray" or "MissingLoopField");
+    }
+
+    [Fact]
+    public void Warns_when_parent_qualified_nested_array_missing()
+    {
+        var sut = new LiveJsonValidator();
+        var result = sut.Validate(
+            """
+            {
+              "name": "Ada",
+              "role": "Eng",
+              "topSkills": ["C#"],
+              "skills": [ { "category": "Backend" } ]
+            }
+            """,
+            new (string Kind, string? JsonPath, string Token)[]
+            {
+                ("array-start", "skills_i.detail", "${ArrayStart skills_i.detail}")
+            },
+            Array.Empty<GenerationIssue>());
+
+        Assert.Contains(result.Issues, i => i.Code == "MissingLoopArray");
+    }
 }

@@ -17,8 +17,25 @@
             <span class="path-chip" title="@State.OutputRoot">@State.OutputRoot</span>
             <button class="btn" type="button" @onclick="BrowseRoot">Browse output</button>
             <button class="btn" type="button" @onclick="RefreshAll">Refresh</button>
+            <button class="btn" type="button" @onclick="OpenHelp" title="Template &amp; JSON grammar">Help</button>
         </div>
     </header>
+
+    @if (_helpOpen)
+    {
+        <div class="help-overlay" @onclick="CloseHelp">
+            <div class="help-dialog" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="help-title">
+                <div class="help-header">
+                    <div id="help-title" class="help-title">@GrammarHelpText.Title</div>
+                    <div class="help-header-actions">
+                        <button class="btn" type="button" @onclick="CopyHelp">@(_helpCopied ? "Copied" : "Copy all")</button>
+                        <button class="btn" type="button" @onclick="CloseHelp">Close</button>
+                    </div>
+                </div>
+                <pre class="help-body" tabindex="0">@GrammarHelpText.Body</pre>
+            </div>
+        </div>
+    }
 
     @if (State.IsLibreOfficeReady)
     {
@@ -209,6 +226,8 @@
     private ElementReference _jsonEditor;
 
     private bool _firstRender = true;
+    private bool _helpOpen;
+    private bool _helpCopied;
 
     protected override void OnInitialized()
     {
@@ -296,6 +315,35 @@
     {
         try { await JS.InvokeVoidAsync("cvSyncJsonScroll", _jsonEditor); }
         catch { /* ignore */ }
+    }
+
+    private void OpenHelp()
+    {
+        _helpOpen = true;
+        _helpCopied = false;
+    }
+
+    private void CloseHelp()
+    {
+        _helpOpen = false;
+        _helpCopied = false;
+    }
+
+    private async Task CopyHelp()
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(GrammarHelpText.Body);
+            _helpCopied = true;
+            StateHasChanged();
+            await Task.Delay(1600);
+            _helpCopied = false;
+            StateHasChanged();
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     private async Task CopyIssues()
