@@ -154,6 +154,17 @@ public sealed class PdfConversionService
         try
         {
             Directory.CreateDirectory(outputDirectory);
+
+            // PDF/A-2b + embed standard fonts so glyphs used in the DOCX are embedded
+            // instead of being remapped to a different face in the PDF viewer.
+            // (plain `--convert-to pdf` often substitutes fonts and looks unlike the DOCX.)
+            const string pdfFilter =
+                "pdf:writer_pdf_Export:" +
+                "{" +
+                "\"SelectPdfVersion\":{\"type\":\"long\",\"value\":\"2\"}," +
+                "\"EmbedStandardFonts\":{\"type\":\"boolean\",\"value\":\"true\"}" +
+                "}";
+
             var psi = new ProcessStartInfo
             {
                 FileName = exe,
@@ -162,8 +173,9 @@ public sealed class PdfConversionService
                     "--headless",
                     "--nologo",
                     "--nofirststartwizard",
+                    "--norestore",
                     "--convert-to",
-                    "pdf",
+                    pdfFilter,
                     "--outdir",
                     outputDirectory,
                     docxPath
@@ -173,6 +185,14 @@ public sealed class PdfConversionService
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            // Isolated profile avoids stale Writer PDF-export defaults from a prior GUI session.
+            var profileDir = Path.Combine(Path.GetTempPath(), "CvGenerator-lo-profile");
+            Directory.CreateDirectory(profileDir);
+            var profileUri = new Uri(profileDir.EndsWith(Path.DirectorySeparatorChar)
+                ? profileDir
+                : profileDir + Path.DirectorySeparatorChar).AbsoluteUri;
+            psi.ArgumentList.Insert(0, $"-env:UserInstallation={profileUri}");
 
             using var process = Process.Start(psi);
             if (process is null)
