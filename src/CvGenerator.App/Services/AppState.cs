@@ -201,19 +201,16 @@ public sealed class AppState : IDisposable
             OutputPreview = Path.Combine(OutputRoot, DateTime.Now.ToString("yyyy-MM-dd"), "(invalid JSON)");
         }
 
-        var aliasMap = AliasPathNormalizer.BuildAliasMap(Placeholders);
+        // Prefer scoped ValidationPath from the scanner (same alias name can mean
+        // different arrays in different loops, e.g. skill under experience vs skills).
         var livePlaceholders = Placeholders.Select(p =>
-        {
-            var kind = AliasPathNormalizer.EffectiveKind(p.Kind, p.JsonPath, p.Token, aliasMap);
-            var path = AliasPathNormalizer.ToValidationPath(kind, p.JsonPath, p.Token, aliasMap);
-            return (kind, (string?)path, p.Token);
-        });
+            (p.Kind, (string?)(p.ValidationPath ?? p.JsonPath), p.Token));
 
         var live = _liveValidator.Validate(JsonText, livePlaceholders, _templateIssues);
 
         JsonHighlightHtml = live.HighlightHtml;
         JsonMarks = live.Marks;
-        PlaceholderBindings = BuildPlaceholderBindings(root, aliasMap);
+        PlaceholderBindings = BuildPlaceholderBindings(root);
         if (!IsBusy)
         {
             Issues = live.Issues;
@@ -223,9 +220,7 @@ public sealed class AppState : IDisposable
         }
     }
 
-    private IReadOnlyList<PlaceholderBinding> BuildPlaceholderBindings(
-        JsonElement? root,
-        IReadOnlyDictionary<string, string> aliasMap)
+    private IReadOnlyList<PlaceholderBinding> BuildPlaceholderBindings(JsonElement? root)
     {
         var resolver = new JsonPathResolver();
         var list = new List<PlaceholderBinding>();
@@ -245,8 +240,8 @@ public sealed class AppState : IDisposable
             }
 
             var data = root.Value;
-            var kind = AliasPathNormalizer.EffectiveKind(p.Kind, p.JsonPath, p.Token, aliasMap);
-            var path = AliasPathNormalizer.ToValidationPath(kind, p.JsonPath, p.Token, aliasMap);
+            var path = p.ValidationPath ?? p.JsonPath ?? "";
+            var kind = p.Kind;
 
             if (kind == "loop-field" && !string.IsNullOrWhiteSpace(path))
             {
@@ -255,14 +250,13 @@ public sealed class AppState : IDisposable
             }
 
             // simple field
-            var key = path;
-            if (string.IsNullOrWhiteSpace(key) || !resolver.TryGetElement(data, key, out var el))
+            if (string.IsNullOrWhiteSpace(path) || !resolver.TryGetElement(data, path, out var el))
             {
                 list.Add(new PlaceholderBinding(p, "missing", "missing"));
                 continue;
             }
 
-            if (resolver.TryResolveValue(data, key, out var value))
+            if (resolver.TryResolveValue(data, path, out var value))
             {
                 if (string.IsNullOrWhiteSpace(value))
                     list.Add(new PlaceholderBinding(p, "empty", "empty"));

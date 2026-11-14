@@ -10,6 +10,8 @@ public sealed class PlaceholderInfo
     public string? JsonPath { get; init; }
     /// <summary>Iterate alias from ${ArrayStart source alias}, when present.</summary>
     public string? Alias { get; init; }
+    /// <summary>Classic _i path for live JSON checks (scope-aware).</summary>
+    public string? ValidationPath { get; init; }
 }
 
 public sealed class PlaceholderScanner
@@ -22,24 +24,16 @@ public sealed class PlaceholderScanner
 
     public IReadOnlyList<PlaceholderInfo> ScanText(string text)
     {
-        var results = new List<PlaceholderInfo>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        var matches = PlaceholderPatterns.AnyPlaceholder().Matches(text ?? "").Cast<System.Text.RegularExpressions.Match>().ToList();
-
-        // Pass 1: collect markers so alias map can resolve nested starts.
-        var provisional = new List<PlaceholderInfo>();
-        foreach (var m in matches)
+        // Keep every occurrence in order so alias scopes can open/close correctly.
+        var ordered = new List<PlaceholderInfo>();
+        foreach (System.Text.RegularExpressions.Match m in PlaceholderPatterns.AnyPlaceholder().Matches(text ?? ""))
         {
             var raw = m.Value;
-            if (!seen.Add(raw))
-                continue;
-
             var inner = m.Groups[1].Value.Trim();
 
             if (PlaceholderPatterns.IsArrayStart(raw, out ArrayMarker start))
             {
-                provisional.Add(new PlaceholderInfo
+                ordered.Add(new PlaceholderInfo
                 {
                     Token = raw,
                     Kind = "array-start",
@@ -51,7 +45,7 @@ public sealed class PlaceholderScanner
 
             if (PlaceholderPatterns.IsArrayEnd(raw, out ArrayMarker end))
             {
-                provisional.Add(new PlaceholderInfo
+                ordered.Add(new PlaceholderInfo
                 {
                     Token = raw,
                     Kind = "array-end",
@@ -61,7 +55,7 @@ public sealed class PlaceholderScanner
                 continue;
             }
 
-            provisional.Add(new PlaceholderInfo
+            ordered.Add(new PlaceholderInfo
             {
                 Token = raw,
                 Kind = PlaceholderPatterns.TryParseLoopReference(inner, out _) ? "loop-field" : "simple",
@@ -69,29 +63,52 @@ public sealed class PlaceholderScanner
             });
         }
 
-        var aliasMap = AliasPathNormalizer.BuildAliasMap(provisional);
+        var scoped = AliasPathNormalizer.AssignScopedPaths(ordered);
+        return AliasPathNormalizer.DedupeByToken(scoped);
+    }
 
-        // Pass 2: rewrite alias fields onto classic _i paths for validation/bindings.
-        foreach (var p in provisional)
+    /// <summary>All occurrences with scoped validation paths (for thorough live checks).</summary>
+    public IReadOnlyList<PlaceholderInfo> ScanTextAllOccurrences(string text)
+    {
+        var ordered = new List<PlaceholderInfo>();
+        foreach (System.Text.RegularExpressions.Match m in PlaceholderPatterns.AnyPlaceholder().Matches(text ?? ""))
         {
-            if (p.Kind is "array-start" or "array-end")
+            var raw = m.Value;
+            var inner = m.Groups[1].Value.Trim();
+
+            if (PlaceholderPatterns.IsArrayStart(raw, out ArrayMarker start))
             {
-                results.Add(p);
+                ordered.Add(new PlaceholderInfo
+                {
+                    Token = raw,
+                    Kind = "array-start",
+                    JsonPath = start.Source,
+                    Alias = start.Alias
+                });
                 continue;
             }
 
-            var kind = AliasPathNormalizer.EffectiveKind(p.Kind, p.JsonPath, p.Token, aliasMap);
-            var path = AliasPathNormalizer.ToValidationPath(kind, p.JsonPath, p.Token, aliasMap);
-            results.Add(new PlaceholderInfo
+            if (PlaceholderPatterns.IsArrayEnd(raw, out ArrayMarker end))
             {
-                Token = p.Token,
-                Kind = kind,
-                JsonPath = path,
-                Alias = p.Alias
+                ordered.Add(new PlaceholderInfo
+                {
+                    Token = raw,
+                    Kind = "array-end",
+                    JsonPath = end.Source,
+                    Alias = end.Alias
+                });
+                continue;
+            }
+
+            ordered.Add(new PlaceholderInfo
+            {
+                Token = raw,
+                Kind = PlaceholderPatterns.TryParseLoopReference(inner, out _) ? "loop-field" : "simple",
+                JsonPath = inner
             });
         }
 
-        return results;
+        return AliasPathNormalizer.AssignScopedPaths(ordered);
     }
 
     private static string ExtractAllText(WordprocessingDocument doc)

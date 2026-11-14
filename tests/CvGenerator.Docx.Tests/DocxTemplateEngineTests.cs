@@ -226,7 +226,7 @@ public class DocxTemplateEngineTests
         var found = scanner.ScanText(
             "${ArrayStart experience exp} ${exp.title} ${ArrayEnd experience}");
         Assert.Contains(found, p => p.Kind == "array-start" && p.JsonPath == "experience" && p.Alias == "exp");
-        Assert.Contains(found, p => p.Kind == "loop-field" && p.JsonPath == "experience_i.title");
+        Assert.Contains(found, p => p.Kind == "loop-field" && p.ValidationPath == "experience_i.title");
     }
 
     [Fact]
@@ -242,14 +242,31 @@ public class DocxTemplateEngineTests
             ${ArrayEnd skills}
             """);
 
-        Assert.Contains(found, p => p.Kind == "loop-field" && p.JsonPath == "skills_i.category");
-        Assert.Contains(found, p => p.Kind == "loop-field" && p.JsonPath == "skills_i.detail_i.name");
+        Assert.Contains(found, p => p.Kind == "loop-field" && p.ValidationPath == "skills_i.category");
+        Assert.Contains(found, p => p.Kind == "loop-field" && p.ValidationPath == "skills_i.detail_i.name");
+        Assert.Contains(found, p => p.Kind == "array-start" && p.Alias == "d" && p.ValidationPath == "skills_i.detail");
+    }
 
-        var aliasMap = AliasPathNormalizer.BuildAliasMap(found);
-        var detailStart = found.First(p => p.Kind == "array-start" && p.Alias == "d");
-        var canonicalDetail = AliasPathNormalizer.ToValidationPath(
-            detailStart.Kind, detailStart.JsonPath, detailStart.Token, aliasMap);
-        Assert.Equal("skills_i.detail", canonicalDetail);
+    [Fact]
+    public void Reused_iterate_alias_resolves_to_correct_source_per_scope()
+    {
+        var scanner = new PlaceholderScanner();
+        var found = scanner.ScanText("""
+            ${ArrayStart experience exp}
+            ${ArrayStart exp.skills skill}${skill}, ${ArrayEnd exp.skills}
+            ${ArrayEnd experience}
+            ${ArrayStart skills skill}
+            ${skill.category}
+            ${ArrayStart skill.detail detail}${detail}, ${ArrayEnd skill.detail}
+            ${ArrayEnd skills}
+            """);
+
+        Assert.Contains(found, p => p.Token == "${skill}" && p.ValidationPath == "experience_i.skills_i");
+        Assert.Contains(found, p => p.Token == "${skill.category}" && p.ValidationPath == "skills_i.category");
+        Assert.Contains(found, p =>
+            p.Kind == "array-start" &&
+            p.JsonPath == "skill.detail" &&
+            p.ValidationPath == "skills_i.detail");
     }
 
     [Fact]

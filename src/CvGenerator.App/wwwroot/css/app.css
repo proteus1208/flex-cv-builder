@@ -308,24 +308,41 @@ button, input, select, textarea {
   line-height: 1.5;
   white-space: pre-wrap;
   word-wrap: break-word;
-  overflow: auto;
+  overflow-wrap: break-word;
   tab-size: 2;
 }
 
 .json-highlight {
+  /* Only the textarea scrolls — keeps highlight + selection aligned. */
+  overflow: hidden;
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
   color: var(--ink);
   background: transparent;
   z-index: 0;
 }
 
 .json-editor {
+  overflow: auto;
   resize: none;
   color: transparent;
+  -webkit-text-fill-color: transparent;
   caret-color: var(--ink);
   background: transparent;
   z-index: 1;
   box-shadow: none;
+}
+
+.json-editor::selection {
+  background: rgba(14, 124, 102, 0.28);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.json-editor::-moz-selection {
+  background: rgba(14, 124, 102, 0.28);
+  color: transparent;
 }
 
 .json-editor:focus {

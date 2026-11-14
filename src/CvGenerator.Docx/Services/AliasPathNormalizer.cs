@@ -3,111 +3,138 @@ using CvGenerator.Docx.Internal;
 namespace CvGenerator.Docx.Services;
 
 /// <summary>
-/// Maps iterate aliases (${ArrayStart experience exp} → exp)
-/// onto classic _i paths for live JSON validation / bindings.
+/// Resolves iterate aliases with proper nesting scope so the same alias
+/// (e.g. skill) can be reused in different loops without colliding.
 /// </summary>
 public static class AliasPathNormalizer
 {
-    public static IReadOnlyDictionary<string, string> BuildAliasMap(IEnumerable<PlaceholderInfo> placeholders)
+    private sealed record ScopeFrame(string Source, string? Alias, string ItemPrefix);
+
+    /// <summary>
+    /// Walk placeholders in document order, assign ValidationPath using an alias stack.
+    /// </summary>
+    public static IReadOnlyList<PlaceholderInfo> AssignScopedPaths(IReadOnlyList<PlaceholderInfo> ordered)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new List<ScopeFrame>();
+        var results = new List<PlaceholderInfo>(ordered.Count);
 
-        // Repeat until nested alias parents resolve (document order may vary).
-        for (var pass = 0; pass < 8; pass++)
+        foreach (var p in ordered)
         {
-            var added = false;
-            foreach (var p in placeholders)
+            if (p.Kind is "array-start" or "loop-start")
             {
-                if (p.Kind != "array-start" || string.IsNullOrEmpty(p.Alias) || string.IsNullOrEmpty(p.JsonPath))
-                    continue;
-                if (map.ContainsKey(p.Alias))
-                    continue;
+                var map = AliasMapFromStack(stack);
+                var itemPrefix = ToItemPrefix(p.JsonPath ?? "", map);
+                var arrayPath = ToArraySource(p.JsonPath ?? "", map) ?? (p.JsonPath ?? "");
+                if (itemPrefix != null)
+                    stack.Add(new ScopeFrame(p.JsonPath ?? "", p.Alias, itemPrefix));
 
-                var canonical = ToItemPrefix(p.JsonPath, map);
-                if (canonical is null)
-                    continue;
-
-                map[p.Alias] = canonical;
-                added = true;
+                results.Add(Clone(p, p.Kind, p.JsonPath, arrayPath));
+                continue;
             }
 
-            if (!added)
-                break;
+            if (p.Kind == "array-end")
+            {
+                PopSource(stack, p.JsonPath);
+                var map = AliasMapFromStack(stack);
+                var arrayPath = ToArraySource(p.JsonPath ?? "", map) ?? (p.JsonPath ?? "");
+                results.Add(Clone(p, p.Kind, p.JsonPath, arrayPath));
+                continue;
+            }
+
+            var aliases = AliasMapFromStack(stack);
+            var kind = p.Kind;
+            var displayPath = p.JsonPath;
+            var validationPath = p.JsonPath ?? "";
+
+            if (kind == "loop-field" || kind == "simple")
+            {
+                var inner = (p.JsonPath ?? "").Trim();
+                if (kind == "simple" &&
+                    !string.IsNullOrEmpty(p.Token) &&
+                    p.Token.StartsWith("${", StringComparison.Ordinal) &&
+                    p.Token.EndsWith('}'))
+                {
+                    inner = p.Token[2..^1].Trim();
+                }
+
+                if (!inner.Contains("_i", StringComparison.Ordinal))
+                {
+                    var rewritten = RewriteAliasField(inner, aliases);
+                    if (rewritten != null)
+                    {
+                        kind = "loop-field";
+                        validationPath = rewritten;
+                        displayPath = rewritten;
+                    }
+                }
+                else
+                {
+                    kind = "loop-field";
+                    validationPath = inner;
+                    displayPath = inner;
+                }
+            }
+
+            results.Add(Clone(p, kind, displayPath, validationPath));
+        }
+
+        return results;
+    }
+
+    /// <summary>Dedupe by token, keeping first scoped occurrence (correct for that context).</summary>
+    public static IReadOnlyList<PlaceholderInfo> DedupeByToken(IEnumerable<PlaceholderInfo> scoped)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var list = new List<PlaceholderInfo>();
+        foreach (var p in scoped)
+        {
+            if (!seen.Add(p.Token))
+                continue;
+            list.Add(p);
+        }
+
+        return list;
+    }
+
+    private static PlaceholderInfo Clone(
+        PlaceholderInfo p,
+        string kind,
+        string? jsonPath,
+        string? validationPath)
+        => new()
+        {
+            Token = p.Token,
+            Kind = kind,
+            JsonPath = jsonPath,
+            Alias = p.Alias,
+            ValidationPath = validationPath
+        };
+
+    private static Dictionary<string, string> AliasMapFromStack(List<ScopeFrame> stack)
+    {
+        // Outer → inner; inner reuses of the same alias win.
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var frame in stack)
+        {
+            if (!string.IsNullOrEmpty(frame.Alias))
+                map[frame.Alias] = frame.ItemPrefix;
         }
 
         return map;
     }
 
-    /// <summary>
-    /// Returns a path LiveJsonValidator understands (classic _i form), or the original path.
-    /// </summary>
-    public static string ToValidationPath(
-        string kind,
-        string? jsonPath,
-        string? token,
-        IReadOnlyDictionary<string, string> aliasMap)
+    private static void PopSource(List<ScopeFrame> stack, string? source)
     {
-        if (string.IsNullOrWhiteSpace(jsonPath))
-            return jsonPath ?? "";
+        if (string.IsNullOrEmpty(source) || stack.Count == 0)
+            return;
 
-        var path = jsonPath.Trim();
-
-        if (kind is "array-start" or "array-end" or "loop-start")
-            return ToArraySource(path, aliasMap) ?? path;
-
-        if (kind == "loop-field")
+        for (var i = stack.Count - 1; i >= 0; i--)
         {
-            // Already classic, or still alias form
-            if (path.Contains("_i", StringComparison.Ordinal))
-                return path;
-            return RewriteAliasField(path, aliasMap) ?? path;
+            var match = stack[i].Source.Equals(source, StringComparison.OrdinalIgnoreCase);
+            stack.RemoveAt(i);
+            if (match)
+                return;
         }
-
-        // simple — may actually be an alias field that was misclassified
-        var rewritten = RewriteAliasField(path, aliasMap);
-        if (rewritten != null)
-            return rewritten;
-
-        // Also try rewriting from token inner text
-        if (!string.IsNullOrEmpty(token) &&
-            token.StartsWith("${", StringComparison.Ordinal) &&
-            token.EndsWith('}'))
-        {
-            var inner = token[2..^1].Trim();
-            rewritten = RewriteAliasField(inner, aliasMap);
-            if (rewritten != null)
-                return rewritten;
-        }
-
-        return path;
-    }
-
-    public static string EffectiveKind(
-        string kind,
-        string? jsonPath,
-        string? token,
-        IReadOnlyDictionary<string, string> aliasMap)
-    {
-        if (kind is "array-start" or "array-end" or "loop-start" or "loop-field")
-            return kind;
-
-        if (kind != "simple" || string.IsNullOrWhiteSpace(jsonPath))
-            return kind;
-
-        var path = jsonPath.Trim();
-        if (RewriteAliasField(path, aliasMap) != null)
-            return "loop-field";
-
-        if (!string.IsNullOrEmpty(token) &&
-            token.StartsWith("${", StringComparison.Ordinal) &&
-            token.EndsWith('}'))
-        {
-            var inner = token[2..^1].Trim();
-            if (RewriteAliasField(inner, aliasMap) != null)
-                return "loop-field";
-        }
-
-        return kind;
     }
 
     private static string? ToItemPrefix(string source, IReadOnlyDictionary<string, string> aliasMap)
