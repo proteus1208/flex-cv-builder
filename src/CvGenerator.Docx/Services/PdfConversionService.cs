@@ -147,10 +147,9 @@ public sealed class PdfConversionService
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
             !IsWordPdfSkipped())
         {
-            if (TryConvertWithWordCom(docxPath, resumePdf, issues))
-                return resumePdf;
-
-            if (TryConvertWithWordScript(docxPath, resumePdf, issues))
+            // Never open resume.docx in Word — a stuck Word dialog locks it (white/slow open).
+            // Convert a temp copy, then force-kill only Word processes we started.
+            if (TryConvertWithWordIsolated(docxPath, resumePdf, issues))
                 return resumePdf;
         }
 
@@ -166,7 +165,6 @@ public sealed class PdfConversionService
 
         try
         {
-            // PDF/A-2b embeds the fonts LibreOffice actually used.
             const string pdfFilter =
                 "pdf:writer_pdf_Export:" +
                 "{" +
@@ -262,197 +260,205 @@ public sealed class PdfConversionService
             "1",
             StringComparison.Ordinal);
 
-    /// <summary>Late-bound Word COM. BitmapMissingFonts=false embeds fonts instead of rasterizing.</summary>
-    [SupportedOSPlatform("windows")]
-    private static bool TryConvertWithWordCom(string docxPath, string pdfPath, IssueCollector issues)
-    {
-        object? wordApp = null;
-        object? documents = null;
-        object? doc = null;
-        try
-        {
-            var wordType = Type.GetTypeFromProgID("Word.Application");
-            if (wordType is null)
-                return false;
-
-            wordApp = Activator.CreateInstance(wordType);
-            if (wordApp is null)
-                return false;
-
-            TrySet(wordApp, "Visible", false);
-            TrySet(wordApp, "DisplayAlerts", 0);
-            TrySet(wordApp, "ScreenUpdating", false);
-
-            documents = wordApp.GetType().InvokeMember(
-                "Documents",
-                System.Reflection.BindingFlags.GetProperty,
-                null,
-                wordApp,
-                null);
-
-            if (documents is null)
-                return false;
-
-            doc = documents.GetType().InvokeMember(
-                "Open",
-                System.Reflection.BindingFlags.InvokeMethod,
-                null,
-                documents,
-                [docxPath, false, true, false]);
-
-            if (doc is null)
-                return false;
-
-            if (File.Exists(pdfPath))
-                File.Delete(pdfPath);
-
-            // ExportAsFixedFormat(
-            //   OutputFileName, ExportFormat=PDF(17), OpenAfterExport=false,
-            //   OptimizeFor=Print(0), Range=AllDocument(0), From, To, Item=DocumentContent(0),
-            //   IncludeDocProps=true, KeepIRM=true, CreateBookmarks=Heading(1),
-            //   DocStructureTags=true, BitmapMissingFonts=false, UseISO19005_1=false)
-            var missing = Type.Missing;
-            doc.GetType().InvokeMember(
-                "ExportAsFixedFormat",
-                System.Reflection.BindingFlags.InvokeMethod,
-                null,
-                doc,
-                [
-                    pdfPath,
-                    17,      // wdExportFormatPDF
-                    false,   // OpenAfterExport
-                    0,       // wdExportOptimizeForPrint
-                    0,       // wdExportAllDocument
-                    missing, // From
-                    missing, // To
-                    0,       // wdExportDocumentContent
-                    true,    // IncludeDocProps
-                    true,    // KeepIRM
-                    1,       // wdExportCreateHeadingBookmarks
-                    true,    // DocStructureTags
-                    false,   // BitmapMissingFonts — embed fonts, don't draw bitmaps
-                    false    // UseISO19005_1
-                ]);
-
-            if (!File.Exists(pdfPath))
-                return false;
-
-            issues.Info("PdfViaWord", "Pdf", "PDF exported via Microsoft Word (fonts match the DOCX).");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            issues.Info(
-                "WordComUnavailable",
-                "Pdf",
-                "Word COM PDF export unavailable — trying script fallback / LibreOffice.",
-                detail: ex.Message);
-            TryDelete(pdfPath);
-            return false;
-        }
-        finally
-        {
-            TryCom(doc, "Close", [0]);
-            TryCom(wordApp, "Quit", [0]);
-            ReleaseCom(ref doc);
-            ReleaseCom(ref documents);
-            ReleaseCom(ref wordApp);
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-        }
-    }
-
     /// <summary>
-    /// cscript CreateObject often finds Click-to-Run Word when in-process COM does not
-    /// (32/64-bit mismatch). Tries System32 and SysWOW64 cscript.
+    /// Out-of-process Word via cscript on a temp copy of the DOCX.
+    /// Avoids locking resume.docx and avoids in-process COM modal dialogs in the WPF host.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static bool TryConvertWithWordScript(string docxPath, string pdfPath, IssueCollector issues)
+    private static bool TryConvertWithWordIsolated(string docxPath, string pdfPath, IssueCollector issues)
     {
-        var scriptPath = Path.Combine(Path.GetTempPath(), "cvgen-word-pdf-" + Guid.NewGuid().ToString("N") + ".vbs");
+        var workDir = Path.Combine(Path.GetTempPath(), "CvGenerator-word-" + Guid.NewGuid().ToString("N"));
+        var scriptPath = Path.Combine(workDir, "export.vbs");
+        var tempDocx = Path.Combine(workDir, "source.docx");
+        var tempPdf = Path.Combine(workDir, "out.pdf");
+        var beforePids = SnapshotWordPids();
+
         try
         {
-            if (File.Exists(pdfPath))
-                File.Delete(pdfPath);
+            Directory.CreateDirectory(workDir);
+            File.Copy(docxPath, tempDocx, overwrite: true);
+            TryDelete(pdfPath);
+            TryDelete(tempPdf);
 
-            var docxEsc = EscapeVbs(docxPath);
-            var pdfEsc = EscapeVbs(pdfPath);
-            var script = $$"""
-                On Error Resume Next
-                Dim w, d
-                Set w = CreateObject("Word.Application")
-                If Err.Number <> 0 Or w Is Nothing Then
-                  WScript.Quit 2
-                End If
-                w.Visible = False
-                w.DisplayAlerts = 0
-                Set d = w.Documents.Open("{{docxEsc}}", False, True, False)
-                If Err.Number <> 0 Or d Is Nothing Then
-                  w.Quit 0
-                  WScript.Quit 3
-                End If
-                d.ExportAsFixedFormat "{{pdfEsc}}", 17, False, 0, 0, , , 0, True, True, 1, True, False, False
-                If Err.Number <> 0 Then
-                  d.Close 0
-                  w.Quit 0
-                  WScript.Quit 4
-                End If
-                d.Close 0
-                w.Quit 0
-                WScript.Quit 0
-                """;
-            File.WriteAllText(scriptPath, script, Encoding.ASCII);
+            WriteWordExportScript(scriptPath, tempDocx, tempPdf);
 
             foreach (var cscript in EnumerateCscriptHosts())
             {
-                TryDelete(pdfPath);
+                // Any leftover Word from a previous attempt still blocks Quit with dialogs.
+                KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+
+                TryDelete(tempPdf);
                 var psi = new ProcessStartInfo
                 {
                     FileName = cscript,
-                    ArgumentList = { "//nologo", scriptPath },
+                    ArgumentList = { "//nologo", "//T:90", scriptPath },
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    WorkingDirectory = workDir
                 };
 
                 using var process = Process.Start(psi);
                 if (process is null)
                     continue;
 
-                if (!process.WaitForExit(120_000))
+                if (!process.WaitForExit(95_000))
                 {
                     try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                    KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
                     continue;
                 }
 
-                if (process.ExitCode == 0 && File.Exists(pdfPath))
+                // Always tear down Word we started — dialogs make Quit hang otherwise.
+                KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+
+                if (process.ExitCode == 0 && File.Exists(tempPdf) && new FileInfo(tempPdf).Length > 0)
                 {
-                    issues.Info("PdfViaWordScript", "Pdf", "PDF exported via Microsoft Word script (fonts match the DOCX).");
+                    File.Copy(tempPdf, pdfPath, overwrite: true);
+                    issues.Info("PdfViaWord", "Pdf", "PDF exported via Microsoft Word (fonts match the DOCX).");
                     return true;
                 }
             }
 
-            issues.Info("WordScriptUnavailable", "Pdf", "Word script PDF export failed — falling back to LibreOffice.");
+            issues.Info(
+                "WordPdfUnavailable",
+                "Pdf",
+                "Word PDF export failed or timed out — falling back to LibreOffice.");
             return false;
         }
         catch (Exception ex)
         {
-            issues.Info("WordScriptUnavailable", "Pdf", "Word script PDF export failed — falling back to LibreOffice.", detail: ex.Message);
+            KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+            issues.Info(
+                "WordPdfUnavailable",
+                "Pdf",
+                "Word PDF export failed — falling back to LibreOffice.",
+                detail: ex.Message);
             return false;
         }
         finally
         {
-            TryDelete(scriptPath);
+            KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void WriteWordExportScript(string scriptPath, string docxPath, string pdfPath)
+    {
+        var docxEsc = EscapeVbs(docxPath);
+        var pdfEsc = EscapeVbs(pdfPath);
+        // Silent open: no conversion/encoding dialogs; never touch the real resume.docx.
+        // Saved=True + Close(0) avoids "save changes?" and stuck Quit dialogs.
+        var script = $$"""
+            On Error Resume Next
+            Dim w, docs, d, i
+            Set w = CreateObject("Word.Application")
+            If Err.Number <> 0 Or w Is Nothing Then
+              WScript.Quit 2
+            End If
+
+            w.Visible = False
+            w.DisplayAlerts = 0
+            w.ScreenUpdating = False
+            w.AutomationSecurity = 3
+            Err.Clear
+
+            Set docs = w.Documents
+            Set d = docs.Open("{{docxEsc}}", False, True, False, , , False, , , , , False, False, , True)
+            If Err.Number <> 0 Or d Is Nothing Then
+              Call ForceQuit(w)
+              WScript.Quit 3
+            End If
+
+            Err.Clear
+            d.ExportAsFixedFormat "{{pdfEsc}}", 17, False, 0, 0, , , 0, True, True, 0, True, False, False
+            If Err.Number <> 0 Then
+              Call SafeCloseAll(w)
+              Call ForceQuit(w)
+              WScript.Quit 4
+            End If
+
+            Call SafeCloseAll(w)
+            Call ForceQuit(w)
+            WScript.Quit 0
+
+            Sub SafeCloseAll(app)
+              On Error Resume Next
+              Dim j, doc
+              For j = app.Documents.Count To 1 Step -1
+                Set doc = app.Documents(j)
+                doc.Saved = True
+                doc.Close 0
+              Next
+            End Sub
+
+            Sub ForceQuit(app)
+              On Error Resume Next
+              Call SafeCloseAll(app)
+              app.DisplayAlerts = 0
+              app.Quit 0
+            End Sub
+            """;
+        File.WriteAllText(scriptPath, script, Encoding.ASCII);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static HashSet<int> SnapshotWordPids()
+    {
+        var set = new HashSet<int>();
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("WINWORD"))
+            {
+                try { set.Add(p.Id); }
+                catch { /* ignore */ }
+                finally
+                {
+                    try { p.Dispose(); } catch { /* ignore */ }
+                }
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return set;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void KillWordPids(HashSet<int> pids)
+    {
+        if (pids.Count == 0)
+            return;
+
+        foreach (var pid in pids)
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                if (!p.ProcessName.Equals("WINWORD", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                p.Kill(entireProcessTree: true);
+                p.WaitForExit(5_000);
+            }
+            catch
+            {
+                // already exited / access denied
+            }
         }
     }
 
     private static IEnumerable<string> EnumerateCscriptHosts()
     {
         var windir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        // Prefer native bitness first; SysWOW64 as fallback for 32-bit Office.
         yield return Path.Combine(windir, "System32", "cscript.exe");
-        yield return Path.Combine(windir, "SysWOW64", "cscript.exe");
+        var wow = Path.Combine(windir, "SysWOW64", "cscript.exe");
+        if (File.Exists(wow))
+            yield return wow;
     }
 
     private static string EscapeVbs(string path)
@@ -471,49 +477,16 @@ public sealed class PdfConversionService
         }
     }
 
-    private static void TrySet(object target, string property, object value)
+    private static void TryDeleteDirectory(string path)
     {
         try
         {
-            target.GetType().InvokeMember(
-                property,
-                System.Reflection.BindingFlags.SetProperty,
-                null,
-                target,
-                [value]);
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
         }
         catch
         {
-            // ignore optional properties
+            // ignore locked temp leftovers
         }
-    }
-
-    private static void TryCom(object? target, string method, object?[]? args)
-    {
-        if (target is null)
-            return;
-        try
-        {
-            target.GetType().InvokeMember(
-                method,
-                System.Reflection.BindingFlags.InvokeMethod,
-                null,
-                target,
-                args);
-        }
-        catch
-        {
-            // ignore cleanup failures
-        }
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static void ReleaseCom(ref object? com)
-    {
-        if (com is null)
-            return;
-        try { Marshal.FinalReleaseComObject(com); }
-        catch { /* ignore */ }
-        com = null;
     }
 }
