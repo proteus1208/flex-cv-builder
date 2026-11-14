@@ -38,7 +38,10 @@ public sealed class AppState
     public string OutputRoot { get; private set; } = "";
     public string TemplatesRoot { get; private set; } = "";
     public string? LibreOfficePath { get; private set; }
+    public string? ResolvedLibreOfficePath { get; private set; }
+    public bool IsLibreOfficeReady => !string.IsNullOrEmpty(ResolvedLibreOfficePath);
     public IReadOnlyList<TemplateInfo> Templates { get; private set; } = Array.Empty<TemplateInfo>();
+    private readonly PdfConversionService _pdf = new();
     public string? SelectedTemplateId { get; set; }
     public IReadOnlyList<PlaceholderInfo> Placeholders { get; private set; } = Array.Empty<PlaceholderInfo>();
     public string OutputPreview { get; private set; } = "";
@@ -55,9 +58,15 @@ public sealed class AppState
         OutputRoot = settings.OutputRoot;
         TemplatesRoot = string.IsNullOrWhiteSpace(settings.TemplatesRoot) ? templatesRoot : settings.TemplatesRoot;
         LibreOfficePath = settings.LibreOfficePath;
+        RefreshLibreOfficeStatus();
         RefreshTemplates();
         RefreshPreview();
         Notify();
+    }
+
+    public void RefreshLibreOfficeStatus()
+    {
+        ResolvedLibreOfficePath = _pdf.FindLibreOffice(LibreOfficePath);
     }
 
     public void RefreshTemplates()
@@ -127,15 +136,20 @@ public sealed class AppState
     {
         var dlg = new OpenFileDialog
         {
-            Title = "Select LibreOffice soffice executable",
-            Filter = "Executable (soffice.exe)|soffice.exe|All files (*.*)|*.*"
+            Title = "Select LibreOffice soffice.exe (usually …\\LibreOffice\\program\\soffice.exe)",
+            Filter = "LibreOffice (soffice.exe)|soffice.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*",
+            InitialDirectory = @"C:\Program Files\LibreOffice\program"
         };
+        if (!Directory.Exists(dlg.InitialDirectory))
+            dlg.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+
         if (dlg.ShowDialog() != true)
             return;
 
         LibreOfficePath = dlg.FileName;
         _settings.LibreOfficePath = LibreOfficePath;
         _settingsStore.Save(_settings);
+        RefreshLibreOfficeStatus();
         Notify();
     }
 
@@ -144,7 +158,24 @@ public sealed class AppState
         LibreOfficePath = null;
         _settings.LibreOfficePath = null;
         _settingsStore.Save(_settings);
+        RefreshLibreOfficeStatus();
         Notify();
+    }
+
+    public void OpenLibreOfficeDownload()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://www.libreoffice.org/download/download-libreoffice/",
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     public void OpenJsonFile()

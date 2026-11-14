@@ -9,46 +9,134 @@ public sealed class PdfConversionService
 {
     public string? FindLibreOffice(string? configuredPath)
     {
-        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
-            return configuredPath;
-
-        var candidates = new List<string>();
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        if (!string.IsNullOrWhiteSpace(configuredPath))
         {
-            var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            candidates.Add(Path.Combine(pf, "LibreOffice", "program", "soffice.exe"));
-            candidates.Add(Path.Combine(pf86, "LibreOffice", "program", "soffice.exe"));
-            candidates.Add(@"C:\Program Files\LibreOffice\program\soffice.exe");
-            candidates.Add(@"C:\Program Files (x86)\LibreOffice\program\soffice.exe");
-        }
-        else
-        {
-            candidates.Add("/usr/bin/soffice");
-            candidates.Add("/usr/bin/libreoffice");
-            candidates.Add("/snap/bin/libreoffice");
+            var configured = ResolveCandidate(configuredPath);
+            if (configured != null)
+                return configured;
         }
 
-        foreach (var c in candidates)
+        foreach (var candidate in EnumerateCandidates())
         {
-            if (File.Exists(c))
-                return c;
-        }
-
-        // PATH lookup
-        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var name in new[] { "soffice", "soffice.exe", "libreoffice", "libreoffice.exe" })
-            {
-                var full = Path.Combine(dir, name);
-                if (File.Exists(full))
-                    return full;
-            }
+            var resolved = ResolveCandidate(candidate);
+            if (resolved != null)
+                return resolved;
         }
 
         return null;
+    }
+
+    private static IEnumerable<string> EnumerateCandidates()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            foreach (var fromRegistry in ReadWindowsInstallPaths())
+                yield return Path.Combine(fromRegistry, "program", "soffice.exe");
+
+            var roots = new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Environment.GetEnvironmentVariable("ProgramW6432") ?? "",
+                @"C:\Program Files",
+                @"C:\Program Files (x86)"
+            }.Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var root in roots)
+            {
+                yield return Path.Combine(root, "LibreOffice", "program", "soffice.exe");
+
+                // Versioned installs: LibreOffice 24, LibreOffice 7.6, etc.
+                foreach (var dir in SafeEnumerateLibreOfficeDirs(root))
+                    yield return Path.Combine(dir, "program", "soffice.exe");
+            }
+        }
+        else
+        {
+            yield return "/usr/bin/soffice";
+            yield return "/usr/bin/libreoffice";
+            yield return "/snap/bin/libreoffice";
+            yield return "/usr/lib/libreoffice/program/soffice";
+        }
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            yield return Path.Combine(dir, "soffice");
+            yield return Path.Combine(dir, "soffice.exe");
+            yield return Path.Combine(dir, "libreoffice");
+            yield return Path.Combine(dir, "libreoffice.exe");
+        }
+    }
+
+    private static IEnumerable<string> SafeEnumerateLibreOfficeDirs(string root)
+    {
+        try
+        {
+            if (!Directory.Exists(root))
+                return Array.Empty<string>();
+            return Directory.EnumerateDirectories(root, "LibreOffice*").ToList();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    private static IEnumerable<string> ReadWindowsInstallPaths()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            yield break;
+
+        string?[] keys =
+        [
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\LibreOffice\UNO\InstallPath",
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\LibreOffice\UNO\InstallPath",
+            @"HKEY_CURRENT_USER\SOFTWARE\LibreOffice\UNO\InstallPath"
+        ];
+
+        foreach (var key in keys)
+        {
+            string? value = null;
+            try
+            {
+                value = Microsoft.Win32.Registry.GetValue(key!, "", null) as string;
+            }
+            catch
+            {
+                // ignore
+            }
+
+            if (!string.IsNullOrWhiteSpace(value))
+                yield return value!;
+        }
+    }
+
+    private static string? ResolveCandidate(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        // User may pick the LibreOffice folder or program folder instead of soffice.exe
+        if (Directory.Exists(path))
+        {
+            var nested = new[]
+            {
+                Path.Combine(path, "soffice.exe"),
+                Path.Combine(path, "program", "soffice.exe"),
+                Path.Combine(path, "soffice"),
+                Path.Combine(path, "program", "soffice")
+            };
+            foreach (var n in nested)
+            {
+                if (File.Exists(n))
+                    return n;
+            }
+
+            return null;
+        }
+
+        return File.Exists(path) ? path : null;
     }
 
     public string ConvertToPdf(string docxPath, string outputDirectory, string? libreOfficePath, IssueCollector issues)
@@ -59,7 +147,7 @@ public sealed class PdfConversionService
             issues.Error(
                 "LibreOfficeMissing",
                 "Pdf",
-                "LibreOffice (soffice) not found. Install LibreOffice or set the path in settings.");
+                "LibreOffice (soffice.exe) not found. Install from https://www.libreoffice.org/download/ or click “Set LibreOffice” and pick …\\LibreOffice\\program\\soffice.exe");
             return string.Empty;
         }
 
@@ -89,7 +177,7 @@ public sealed class PdfConversionService
             using var process = Process.Start(psi);
             if (process is null)
             {
-                issues.Error("LibreOfficeStartFailed", "Pdf", "Failed to start LibreOffice process.");
+                issues.Error("LibreOfficeStartFailed", "Pdf", "Failed to start LibreOffice process.", detail: exe);
                 return string.Empty;
             }
 
@@ -103,7 +191,7 @@ public sealed class PdfConversionService
             if (!process.WaitForExit(120_000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-                issues.Error("LibreOfficeTimeout", "Pdf", "LibreOffice conversion timed out after 120s.");
+                issues.Error("LibreOfficeTimeout", "Pdf", "LibreOffice conversion timed out after 120s.", detail: exe);
                 return string.Empty;
             }
 
@@ -117,11 +205,10 @@ public sealed class PdfConversionService
                     "LibreOfficeFailed",
                     "Pdf",
                     $"PDF conversion failed (exit {process.ExitCode}).",
-                    detail: $"{stdout}\n{stderr}");
+                    detail: $"{exe}\n{stdout}\n{stderr}");
                 return string.Empty;
             }
 
-            // Normalize to resume.pdf if needed
             var resumePdf = Path.Combine(outputDirectory, "resume.pdf");
             if (!string.Equals(expected, resumePdf, StringComparison.OrdinalIgnoreCase))
             {
