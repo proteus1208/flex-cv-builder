@@ -97,4 +97,29 @@ public class LiveJsonValidatorTests
 
         Assert.Contains(result.Issues, i => i.Code == "MissingLoopArray");
     }
+
+    [Fact]
+    public void Does_not_flag_canonical_alias_loop_fields_as_missing_root_keys()
+    {
+        var sut = new LiveJsonValidator();
+        var result = sut.Validate(
+            """
+            {
+              "name": "Ada",
+              "role": "Eng",
+              "topSkills": ["C#"],
+              "experience": [ { "title": "Lead", "company": "A" } ]
+            }
+            """,
+            new (string Kind, string? JsonPath, string Token)[]
+            {
+                ("array-start", "experience", "${ArrayStart experience exp}"),
+                ("loop-field", "experience_i.title", "${exp.title}"),
+                ("loop-field", "experience_i.company", "${exp.company}")
+            },
+            Array.Empty<GenerationIssue>());
+
+        Assert.DoesNotContain(result.Issues, i => i.Code == "MissingField");
+        Assert.DoesNotContain(result.Issues, i => i.Code is "MissingLoopArray" or "MissingLoopField");
+    }
 }

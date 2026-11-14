@@ -201,14 +201,19 @@ public sealed class AppState : IDisposable
             OutputPreview = Path.Combine(OutputRoot, DateTime.Now.ToString("yyyy-MM-dd"), "(invalid JSON)");
         }
 
-        var live = _liveValidator.Validate(
-            JsonText,
-            Placeholders.Select(p => (p.Kind, p.JsonPath, p.Token)),
-            _templateIssues);
+        var aliasMap = AliasPathNormalizer.BuildAliasMap(Placeholders);
+        var livePlaceholders = Placeholders.Select(p =>
+        {
+            var kind = AliasPathNormalizer.EffectiveKind(p.Kind, p.JsonPath, p.Token, aliasMap);
+            var path = AliasPathNormalizer.ToValidationPath(kind, p.JsonPath, p.Token, aliasMap);
+            return (kind, (string?)path, p.Token);
+        });
+
+        var live = _liveValidator.Validate(JsonText, livePlaceholders, _templateIssues);
 
         JsonHighlightHtml = live.HighlightHtml;
         JsonMarks = live.Marks;
-        PlaceholderBindings = BuildPlaceholderBindings(root);
+        PlaceholderBindings = BuildPlaceholderBindings(root, aliasMap);
         if (!IsBusy)
         {
             Issues = live.Issues;
@@ -218,7 +223,9 @@ public sealed class AppState : IDisposable
         }
     }
 
-    private IReadOnlyList<PlaceholderBinding> BuildPlaceholderBindings(JsonElement? root)
+    private IReadOnlyList<PlaceholderBinding> BuildPlaceholderBindings(
+        JsonElement? root,
+        IReadOnlyDictionary<string, string> aliasMap)
     {
         var resolver = new JsonPathResolver();
         var list = new List<PlaceholderBinding>();
@@ -238,15 +245,17 @@ public sealed class AppState : IDisposable
             }
 
             var data = root.Value;
+            var kind = AliasPathNormalizer.EffectiveKind(p.Kind, p.JsonPath, p.Token, aliasMap);
+            var path = AliasPathNormalizer.ToValidationPath(kind, p.JsonPath, p.Token, aliasMap);
 
-            if (p.Kind == "loop-field" && !string.IsNullOrWhiteSpace(p.JsonPath))
+            if (kind == "loop-field" && !string.IsNullOrWhiteSpace(path))
             {
-                list.Add(BindLoopField(p, data, resolver));
+                list.Add(BindLoopField(p, path, data, resolver));
                 continue;
             }
 
             // simple field
-            var key = p.JsonPath ?? "";
+            var key = path;
             if (string.IsNullOrWhiteSpace(key) || !resolver.TryGetElement(data, key, out var el))
             {
                 list.Add(new PlaceholderBinding(p, "missing", "missing"));
@@ -269,10 +278,14 @@ public sealed class AppState : IDisposable
         return list;
     }
 
-    private static PlaceholderBinding BindLoopField(PlaceholderInfo p, JsonElement root, JsonPathResolver resolver)
+    private static PlaceholderBinding BindLoopField(
+        PlaceholderInfo p,
+        string loopPath,
+        JsonElement root,
+        JsonPathResolver resolver)
     {
         // skills_i.category | skills_i.detail_i | skills_i.detail_i.name
-        if (!TrySplitLoopPath(p.JsonPath!, out var chain, out var field))
+        if (!TrySplitLoopPath(loopPath, out var chain, out var field))
             return new PlaceholderBinding(p, "missing", "bad loop field");
 
         if (!resolver.TryGetElement(root, chain[0], out var cursor) || cursor.ValueKind != JsonValueKind.Array)

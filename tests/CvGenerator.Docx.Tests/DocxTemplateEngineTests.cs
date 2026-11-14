@@ -230,6 +230,29 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void Alias_normalizer_maps_nested_iterate_names_for_live_validation()
+    {
+        var scanner = new PlaceholderScanner();
+        var found = scanner.ScanText("""
+            ${ArrayStart skills skill}
+            ${skill.category}
+            ${ArrayStart skill.detail d}
+            ${d.name}
+            ${ArrayEnd skill.detail}
+            ${ArrayEnd skills}
+            """);
+
+        Assert.Contains(found, p => p.Kind == "loop-field" && p.JsonPath == "skills_i.category");
+        Assert.Contains(found, p => p.Kind == "loop-field" && p.JsonPath == "skills_i.detail_i.name");
+
+        var aliasMap = AliasPathNormalizer.BuildAliasMap(found);
+        var detailStart = found.First(p => p.Kind == "array-start" && p.Alias == "d");
+        var canonicalDetail = AliasPathNormalizer.ToValidationPath(
+            detailStart.Kind, detailStart.JsonPath, detailStart.Token, aliasMap);
+        Assert.Equal("skills_i.detail", canonicalDetail);
+    }
+
+    [Fact]
     public void Parent_qualified_nested_ArrayStart_expands_object_and_scalar_items()
     {
         var template = CreateTempDocx(doc =>

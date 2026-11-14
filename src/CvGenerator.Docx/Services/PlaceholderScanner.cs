@@ -24,23 +24,11 @@ public sealed class PlaceholderScanner
     {
         var results = new List<PlaceholderInfo>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var aliasToCanonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         var matches = PlaceholderPatterns.AnyPlaceholder().Matches(text ?? "").Cast<System.Text.RegularExpressions.Match>().ToList();
 
-        // Pass 1: collect ArrayStart aliases → canonical _i prefixes for live validation.
-        foreach (var m in matches)
-        {
-            var raw = m.Value;
-            if (!PlaceholderPatterns.IsArrayStart(raw, out ArrayMarker marker) || marker.Alias is null)
-                continue;
-
-            var canonical = ToCanonicalPrefix(marker.Source, aliasToCanonical);
-            if (canonical != null)
-                aliasToCanonical[marker.Alias] = canonical;
-        }
-
-        // Pass 2: classify placeholders.
+        // Pass 1: collect markers so alias map can resolve nested starts.
+        var provisional = new List<PlaceholderInfo>();
         foreach (var m in matches)
         {
             var raw = m.Value;
@@ -51,7 +39,7 @@ public sealed class PlaceholderScanner
 
             if (PlaceholderPatterns.IsArrayStart(raw, out ArrayMarker start))
             {
-                results.Add(new PlaceholderInfo
+                provisional.Add(new PlaceholderInfo
                 {
                     Token = raw,
                     Kind = "array-start",
@@ -63,7 +51,7 @@ public sealed class PlaceholderScanner
 
             if (PlaceholderPatterns.IsArrayEnd(raw, out ArrayMarker end))
             {
-                results.Add(new PlaceholderInfo
+                provisional.Add(new PlaceholderInfo
                 {
                     Token = raw,
                     Kind = "array-end",
@@ -73,91 +61,37 @@ public sealed class PlaceholderScanner
                 continue;
             }
 
-            if (PlaceholderPatterns.TryParseLoopReference(inner, out _))
-            {
-                results.Add(new PlaceholderInfo
-                {
-                    Token = raw,
-                    Kind = "loop-field",
-                    JsonPath = inner
-                });
-                continue;
-            }
-
-            if (TryRewriteAliasPath(inner, aliasToCanonical, out var canonicalPath))
-            {
-                results.Add(new PlaceholderInfo
-                {
-                    Token = raw,
-                    Kind = "loop-field",
-                    JsonPath = canonicalPath
-                });
-                continue;
-            }
-
-            results.Add(new PlaceholderInfo
+            provisional.Add(new PlaceholderInfo
             {
                 Token = raw,
-                Kind = "simple",
+                Kind = PlaceholderPatterns.TryParseLoopReference(inner, out _) ? "loop-field" : "simple",
                 JsonPath = inner
             });
         }
 
-        return results;
-    }
+        var aliasMap = AliasPathNormalizer.BuildAliasMap(provisional);
 
-    private static string? ToCanonicalPrefix(
-        string source,
-        IReadOnlyDictionary<string, string> aliasToCanonical)
-    {
-        if (PlaceholderPatterns.TryParseQualifiedArrayName(source, out var parents, out var prop))
+        // Pass 2: rewrite alias fields onto classic _i paths for validation/bindings.
+        foreach (var p in provisional)
         {
-            if (parents.Count == 0)
-                return prop + "_i";
-
-            return string.Join(".", parents.Select(p => p + "_i")) + "." + prop + "_i";
-        }
-
-        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var child) &&
-            aliasToCanonical.TryGetValue(parentAlias, out var parentPrefix))
-        {
-            return parentPrefix + "." + child + "_i";
-        }
-
-        return null;
-    }
-
-    private static bool TryRewriteAliasPath(
-        string inner,
-        IReadOnlyDictionary<string, string> aliasToCanonical,
-        out string canonical)
-    {
-        canonical = "";
-        var s = inner.Trim();
-
-        string? bestAlias = null;
-        foreach (var alias in aliasToCanonical.Keys)
-        {
-            if (s.Equals(alias, StringComparison.OrdinalIgnoreCase) ||
-                s.StartsWith(alias + ".", StringComparison.OrdinalIgnoreCase))
+            if (p.Kind is "array-start" or "array-end")
             {
-                if (bestAlias is null || alias.Length > bestAlias.Length)
-                    bestAlias = alias;
+                results.Add(p);
+                continue;
             }
+
+            var kind = AliasPathNormalizer.EffectiveKind(p.Kind, p.JsonPath, p.Token, aliasMap);
+            var path = AliasPathNormalizer.ToValidationPath(kind, p.JsonPath, p.Token, aliasMap);
+            results.Add(new PlaceholderInfo
+            {
+                Token = p.Token,
+                Kind = kind,
+                JsonPath = path,
+                Alias = p.Alias
+            });
         }
 
-        if (bestAlias is null)
-            return false;
-
-        var prefix = aliasToCanonical[bestAlias];
-        if (s.Equals(bestAlias, StringComparison.OrdinalIgnoreCase))
-        {
-            canonical = prefix;
-            return true;
-        }
-
-        canonical = prefix + "." + s[(bestAlias.Length + 1)..];
-        return true;
+        return results;
     }
 
     private static string ExtractAllText(WordprocessingDocument doc)
