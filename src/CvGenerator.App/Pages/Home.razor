@@ -1,0 +1,207 @@
+@page "/"
+@using CvGenerator.App.Services
+@using CvGenerator.Core.Models
+@using CvGenerator.Docx.Services
+@inject AppState State
+@implements IDisposable
+
+<div class="shell">
+    <header class="topbar">
+        <div class="brand">CV Generator</div>
+        <div class="topbar-right">
+            <span class="path" title="@State.OutputRoot">@State.OutputRoot</span>
+            <button class="btn" type="button" @onclick="BrowseRoot">Browse output</button>
+            <button class="btn" type="button" @onclick="BrowseLibreOffice" title="@(State.LibreOfficePath ?? "Auto-detect LibreOffice")">LibreOffice…</button>
+            <button class="btn" type="button" @onclick="RefreshAll">Refresh</button>
+        </div>
+    </header>
+
+    <div class="workspace">
+        <section class="panel">
+            <div class="panel-title">CV JSON</div>
+            <div class="toolbar">
+                <button class="btn" type="button" @onclick="OpenJson">Open</button>
+                <button class="btn" type="button" @onclick="FormatJson">Format</button>
+                <button class="btn" type="button" @onclick="OnJsonChanged">Validate path</button>
+            </div>
+            <textarea class="json-editor"
+                      @bind="State.JsonText"
+                      @bind:event="oninput"
+                      @bind:after="OnJsonChanged"
+                      spellcheck="false"></textarea>
+        </section>
+
+        <section class="panel">
+            <div class="panel-title">Template</div>
+            <div class="toolbar">
+                <select class="select-wide" value="@State.SelectedTemplateId" @onchange="OnTemplateChanged">
+                    @if (!State.Templates.Any())
+                    {
+                        <option value="">No templates found</option>
+                    }
+                    else
+                    {
+                        @foreach (var t in State.Templates)
+                        {
+                            <option value="@t.Id">@t.Id</option>
+                        }
+                    }
+                </select>
+                <button class="btn" type="button" @onclick="ImportTemplate">Import</button>
+                <button class="btn" type="button" @onclick="RefreshTemplates">Refresh</button>
+            </div>
+
+            <div class="panel-title">Placeholders found</div>
+            <div class="placeholder-list">
+                @if (!State.Placeholders.Any())
+                {
+                    <div class="empty">Select or import a .docx template to inspect placeholders.</div>
+                }
+                else
+                {
+                    @foreach (var p in State.Placeholders)
+                    {
+                        <div class="placeholder-item">
+                            <span>@p.Token</span>
+                            <span class="muted">@(p.JsonPath ?? p.Kind) · @p.Kind</span>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="panel-title">Output preview path</div>
+            <div class="preview-path">@State.OutputPreview</div>
+        </section>
+    </div>
+
+    <section class="debug">
+        <div class="debug-header">
+            <div class="debug-title">Debug Error List</div>
+            <div class="debug-actions">
+                <select @bind="State.IssueFilter" @bind:after="Notify">
+                    <option value="All">All</option>
+                    <option value="Errors">Errors only</option>
+                    <option value="Warnings">Warnings</option>
+                </select>
+                <button class="btn" type="button" @onclick="CopyIssues">Copy</button>
+                <button class="btn" type="button" @onclick="ClearIssues">Clear</button>
+            </div>
+        </div>
+        <div class="debug-list">
+            @{
+                var rows = State.FilteredIssues().ToList();
+            }
+            @if (!rows.Any())
+            {
+                <div class="debug-row"><span class="muted">No issues.</span></div>
+            }
+            else
+            {
+                @foreach (var issue in rows)
+                {
+                    <div class="debug-row">
+                        <span class="@SeverityClass(issue.Severity)">@issue.Severity.ToString().ToUpperInvariant()</span>
+                        <span>@issue.Step</span>
+                        <span>
+                            @issue.Message
+                            @if (!string.IsNullOrEmpty(issue.Path))
+                            {
+                                <span class="muted"> [@issue.Path]</span>
+                            }
+                        </span>
+                    </div>
+                }
+            }
+        </div>
+    </section>
+
+    <footer class="actionbar">
+        <div>
+            <button class="btn btn-primary" type="button" disabled="@State.IsBusy" @onclick="GenerateAll">
+                @(State.IsBusy ? "Generating…" : "Generate All")
+            </button>
+            <button class="btn" type="button"
+                    disabled="@(string.IsNullOrEmpty(State.LastOutputDirectory))"
+                    @onclick="OpenOutput">
+                Open output folder
+            </button>
+        </div>
+        <div class="status @StatusClass(State.Status)">status: @State.Status</div>
+    </footer>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        State.Changed += OnChanged;
+    }
+
+    public void Dispose() => State.Changed -= OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private void Notify() => StateHasChanged();
+
+    private void BrowseRoot() => State.BrowseOutputRoot();
+    private void BrowseLibreOffice() => State.BrowseLibreOffice();
+    private void OpenJson() => State.OpenJsonFile();
+    private void FormatJson() => State.FormatJson();
+    private void ImportTemplate() => State.ImportTemplate();
+    private void RefreshTemplates()
+    {
+        State.RefreshTemplates();
+        StateHasChanged();
+    }
+
+    private void RefreshAll()
+    {
+        State.RefreshTemplates();
+        State.RefreshPreview();
+        StateHasChanged();
+    }
+
+    private void OnJsonChanged()
+    {
+        State.RefreshPreview();
+        StateHasChanged();
+    }
+
+    private void OnTemplateChanged(ChangeEventArgs e)
+    {
+        State.SelectTemplate(e.Value?.ToString());
+    }
+
+    private async Task GenerateAll() => await State.GenerateAllAsync();
+    private void OpenOutput() => State.OpenLastOutput();
+    private void ClearIssues() => State.ClearIssues();
+
+    private async Task CopyIssues()
+    {
+        var text = State.GetFilteredIssuesText();
+        try
+        {
+            System.Windows.Clipboard.SetText(string.IsNullOrWhiteSpace(text) ? "(no issues)" : text);
+        }
+        catch
+        {
+            // Clipboard may fail in some hosts; ignore.
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private static string SeverityClass(IssueSeverity s) => s switch
+    {
+        IssueSeverity.Error => "sev-error",
+        IssueSeverity.Warning => "sev-warning",
+        _ => "sev-info"
+    };
+
+    private static string StatusClass(GenerationStatus s) => s switch
+    {
+        GenerationStatus.Success => "status-success",
+        GenerationStatus.Partial => "status-partial",
+        GenerationStatus.Failed => "status-failed",
+        _ => "status-ready"
+    };
+}

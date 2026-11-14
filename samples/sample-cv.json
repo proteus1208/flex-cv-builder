@@ -1,0 +1,22 @@
+{
+  "name": "Cody Lee Berry",
+  "role": "Senior Engineer",
+  "linkedin": "https://linkedin.com/in/example",
+  "topSkills": ["React", "Node.js", "C#"],
+  "notes": "Tailor summary for Platform team. Emphasize API design and mentoring.",
+  "summary": "Engineer focused on reliable product delivery and clear documentation.",
+  "experience": [
+    {
+      "title": "Senior Engineer",
+      "company": "Example Corp",
+      "years": "2022-Present",
+      "description": "Led resume tooling and document pipelines."
+    },
+    {
+      "title": "Engineer",
+      "company": "Prior Co",
+      "years": "2019-2022",
+      "description": "Built APIs and frontend features."
+    }
+  ]
+}

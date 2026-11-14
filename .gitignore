@@ -1,0 +1,12 @@
+bin/
+obj/
+artifacts/
+.vs/
+*.user
+*.suo
+.idea/
+Output/**
+!Output/.gitkeep
+Templates/~$*
+*.log
+.DS_Store
