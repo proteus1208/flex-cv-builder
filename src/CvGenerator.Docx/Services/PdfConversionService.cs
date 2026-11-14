@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 using CvGenerator.Core.Services;
 
@@ -46,7 +47,6 @@ public sealed class PdfConversionService
             {
                 yield return Path.Combine(root, "LibreOffice", "program", "soffice.exe");
 
-                // Versioned installs: LibreOffice 24, LibreOffice 7.6, etc.
                 foreach (var dir in SafeEnumerateLibreOfficeDirs(root))
                     yield return Path.Combine(dir, "program", "soffice.exe");
             }
@@ -117,7 +117,6 @@ public sealed class PdfConversionService
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        // User may pick the LibreOffice folder or program folder instead of soffice.exe
         if (Directory.Exists(path))
         {
             var nested = new[]
@@ -141,6 +140,16 @@ public sealed class PdfConversionService
 
     public string ConvertToPdf(string docxPath, string outputDirectory, string? libreOfficePath, IssueCollector issues)
     {
+        Directory.CreateDirectory(outputDirectory);
+        var resumePdf = Path.Combine(outputDirectory, "resume.pdf");
+
+        // Prefer Microsoft Word on Windows — it keeps DOCX fonts/styles most faithfully.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+            TryConvertWithWord(docxPath, resumePdf, issues))
+        {
+            return resumePdf;
+        }
+
         var exe = FindLibreOffice(libreOfficePath);
         if (exe is null)
         {
@@ -153,11 +162,7 @@ public sealed class PdfConversionService
 
         try
         {
-            Directory.CreateDirectory(outputDirectory);
-
-            // PDF/A-2b + embed standard fonts so glyphs used in the DOCX are embedded
-            // instead of being remapped to a different face in the PDF viewer.
-            // (plain `--convert-to pdf` often substitutes fonts and looks unlike the DOCX.)
+            // PDF/A-2b embeds used fonts so the PDF does not silently remap faces.
             const string pdfFilter =
                 "pdf:writer_pdf_Export:" +
                 "{" +
@@ -165,34 +170,31 @@ public sealed class PdfConversionService
                 "\"EmbedStandardFonts\":{\"type\":\"boolean\",\"value\":\"true\"}" +
                 "}";
 
+            var profileDir = Path.Combine(Path.GetTempPath(), "CvGenerator-lo-profile");
+            Directory.CreateDirectory(profileDir);
+            var profileUri = new Uri(
+                profileDir.EndsWith(Path.DirectorySeparatorChar)
+                    ? profileDir
+                    : profileDir + Path.DirectorySeparatorChar).AbsoluteUri;
+
             var psi = new ProcessStartInfo
             {
                 FileName = exe,
-                ArgumentList =
-                {
-                    "--headless",
-                    "--nologo",
-                    "--nofirststartwizard",
-                    "--norestore",
-                    "--convert-to",
-                    pdfFilter,
-                    "--outdir",
-                    outputDirectory,
-                    docxPath
-                },
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-
-            // Isolated profile avoids stale Writer PDF-export defaults from a prior GUI session.
-            var profileDir = Path.Combine(Path.GetTempPath(), "CvGenerator-lo-profile");
-            Directory.CreateDirectory(profileDir);
-            var profileUri = new Uri(profileDir.EndsWith(Path.DirectorySeparatorChar)
-                ? profileDir
-                : profileDir + Path.DirectorySeparatorChar).AbsoluteUri;
-            psi.ArgumentList.Insert(0, $"-env:UserInstallation={profileUri}");
+            psi.ArgumentList.Add($"-env:UserInstallation={profileUri}");
+            psi.ArgumentList.Add("--headless");
+            psi.ArgumentList.Add("--nologo");
+            psi.ArgumentList.Add("--nofirststartwizard");
+            psi.ArgumentList.Add("--norestore");
+            psi.ArgumentList.Add("--convert-to");
+            psi.ArgumentList.Add(pdfFilter);
+            psi.ArgumentList.Add("--outdir");
+            psi.ArgumentList.Add(outputDirectory);
+            psi.ArgumentList.Add(docxPath);
 
             using var process = Process.Start(psi);
             if (process is null)
@@ -229,21 +231,135 @@ public sealed class PdfConversionService
                 return string.Empty;
             }
 
-            var resumePdf = Path.Combine(outputDirectory, "resume.pdf");
             if (!string.Equals(expected, resumePdf, StringComparison.OrdinalIgnoreCase))
             {
                 if (File.Exists(resumePdf))
                     File.Delete(resumePdf);
                 File.Move(expected, resumePdf);
-                return resumePdf;
             }
 
-            return expected;
+            issues.Info(
+                "PdfViaLibreOffice",
+                "Pdf",
+                "PDF exported via LibreOffice (PDF/A). For closest font match to Word, install the template’s fonts on this PC or install Microsoft Word.");
+
+            return resumePdf;
         }
         catch (Exception ex)
         {
             issues.Error("LibreOfficeFailed", "Pdf", $"PDF conversion error: {ex.Message}", detail: ex.ToString());
             return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Uses late-bound Word COM when installed. Best font/style fidelity on Windows.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static bool TryConvertWithWord(string docxPath, string pdfPath, IssueCollector issues)
+    {
+        object? wordApp = null;
+        object? documents = null;
+        object? doc = null;
+        try
+        {
+            var wordType = Type.GetTypeFromProgID("Word.Application");
+            if (wordType is null)
+                return false;
+
+            wordApp = Activator.CreateInstance(wordType);
+            if (wordApp is null)
+                return false;
+
+            wordType.InvokeMember(
+                "Visible",
+                System.Reflection.BindingFlags.SetProperty,
+                null,
+                wordApp,
+                [false]);
+
+            documents = wordType.InvokeMember(
+                "Documents",
+                System.Reflection.BindingFlags.GetProperty,
+                null,
+                wordApp,
+                null);
+
+            if (documents is null)
+                return false;
+
+            doc = documents.GetType().InvokeMember(
+                "Open",
+                System.Reflection.BindingFlags.InvokeMethod,
+                null,
+                documents,
+                [docxPath, false, true]); // FileName, ConfirmConversions, ReadOnly
+
+            if (doc is null)
+                return false;
+
+            if (File.Exists(pdfPath))
+                File.Delete(pdfPath);
+
+            // WdExportFormat.wdExportFormatPDF = 17
+            doc.GetType().InvokeMember(
+                "ExportAsFixedFormat",
+                System.Reflection.BindingFlags.InvokeMethod,
+                null,
+                doc,
+                [pdfPath, 17]);
+
+            if (!File.Exists(pdfPath))
+                return false;
+
+            issues.Info("PdfViaWord", "Pdf", "PDF exported via Microsoft Word (best font match to the DOCX).");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            issues.Info(
+                "WordPdfUnavailable",
+                "Pdf",
+                "Microsoft Word PDF export unavailable — falling back to LibreOffice.",
+                detail: ex.Message);
+            try
+            {
+                if (File.Exists(pdfPath))
+                    File.Delete(pdfPath);
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return false;
+        }
+        finally
+        {
+            TryCom(doc, "Close", [false]);
+            TryCom(wordApp, "Quit", null);
+            if (doc != null) Marshal.FinalReleaseComObject(doc);
+            if (documents != null) Marshal.FinalReleaseComObject(documents);
+            if (wordApp != null) Marshal.FinalReleaseComObject(wordApp);
+        }
+    }
+
+    private static void TryCom(object? target, string method, object?[]? args)
+    {
+        if (target is null)
+            return;
+        try
+        {
+            target.GetType().InvokeMember(
+                method,
+                System.Reflection.BindingFlags.InvokeMethod,
+                null,
+                target,
+                args);
+        }
+        catch
+        {
+            // ignore cleanup failures
         }
     }
 }

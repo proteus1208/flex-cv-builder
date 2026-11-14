@@ -22,7 +22,7 @@ The output root is remembered in `%AppData%/CvGenerator/settings.json`.
 | Build (Windows recommended for the UI) | .NET 10 SDK |
 | Run (other PCs) | **No .NET install** if you use `scripts/build-single.sh` |
 | Run | [WebView2 Evergreen](https://developer.microsoft.com/microsoft-edge/webview2/) (included on most Win10/11) |
-| PDF | [LibreOffice](https://www.libreoffice.org/) (`soffice`) installed |
+| PDF | [LibreOffice](https://www.libreoffice.org/) (`soffice`), or **Microsoft Word** on Windows (preferred for font fidelity) |
 
 ## Placeholder syntax
 
@@ -134,6 +134,11 @@ chmod +x scripts/*.sh
 5. **Action bar** — Generate All + status (`Ready` / `Success` / `Partial` / `Failed`)
 
 PDF failure with successful DOCX/JSON/notes → **Partial** (not silent success).
+
+### PDF fonts
+
+- On Windows, if **Microsoft Word** is installed, PDF is exported through Word so fonts match the DOCX.
+- Otherwise LibreOffice exports **PDF/A-2b** (embeds fonts). Install the same fonts used in your `.docx` template on that machine for the closest look.
 
 ## Develop libraries / tests on Linux
 
