@@ -22,6 +22,67 @@
           pre.scrollLeft = el.scrollLeft;
         }
       };
+
+      window.cvJsonEditorTab = function (el, shift) {
+        if (!el) return null;
+        var indent = '  ';
+        var value = el.value;
+        var start = el.selectionStart;
+        var end = el.selectionEnd;
+
+        if (!shift && start === end) {
+          el.value = value.slice(0, start) + indent + value.slice(end);
+          el.selectionStart = el.selectionEnd = start + indent.length;
+          return el.value;
+        }
+
+        var blockStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+        var blockEnd = end;
+        if (start === end || value[end - 1] !== '\n') {
+          var nl = value.indexOf('\n', end);
+          blockEnd = nl === -1 ? value.length : nl;
+        } else {
+          blockEnd = end - 1;
+        }
+
+        var block = value.slice(blockStart, blockEnd);
+        var lines = block.split('\n');
+        var firstDelta = 0;
+        var totalDelta = 0;
+
+        var newLines = lines.map(function (line, i) {
+          if (shift) {
+            var n = 0;
+            if (line.startsWith(indent)) n = indent.length;
+            else if (line.startsWith('\t')) n = 1;
+            else {
+              while (n < indent.length && line[n] === ' ') n++;
+            }
+            if (i === 0) firstDelta = -n;
+            totalDelta -= n;
+            return line.slice(n);
+          }
+          if (i === 0) firstDelta = indent.length;
+          totalDelta += indent.length;
+          return indent + line;
+        });
+
+        el.value = value.slice(0, blockStart) + newLines.join('\n') + value.slice(blockEnd);
+        el.selectionStart = Math.max(blockStart, start + firstDelta);
+        el.selectionEnd = Math.max(el.selectionStart, end + totalDelta);
+        return el.value;
+      };
+
+      window.cvBindJsonEditorKeys = function (el) {
+        if (!el || el._cvTabBound) return;
+        el._cvTabBound = true;
+        el.addEventListener('keydown', function (e) {
+          if (e.key !== 'Tab') return;
+          e.preventDefault();
+          window.cvJsonEditorTab(el, e.shiftKey);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+      };
     </script>
 </body>
 </html>

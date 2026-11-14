@@ -236,10 +236,14 @@
         State.RefreshPreviewAndLiveValidation();
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        try { await JS.InvokeVoidAsync("cvBindJsonEditorKeys", _jsonEditor); }
+        catch { /* ignore */ }
+
         if (!firstRender || !_firstRender)
             return;
+
         _firstRender = false;
         // Ensure highlight mirror matches textarea on first paint.
         State.RefreshPreviewAndLiveValidation();
