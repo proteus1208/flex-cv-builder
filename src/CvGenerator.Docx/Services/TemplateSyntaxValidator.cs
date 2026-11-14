@@ -56,6 +56,9 @@ public sealed partial class TemplateSyntaxValidator
                 continue;
             }
 
+            if (PlaceholderPatterns.IsJoinKeyword(inner))
+                continue;
+
             if (PlaceholderPatterns.IsArrayStart(token, out ArrayMarker startMarker))
             {
                 var name = startMarker.Source;
@@ -189,7 +192,7 @@ public sealed partial class TemplateSyntaxValidator
         var first = inner.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
         var lower = first.ToLowerInvariant();
 
-        if (lower is "arraystart" or "arrayend")
+        if (lower is "arraystart" or "arrayend" or "joinstart" or "joinend")
             return false;
 
         if (lower is "start" or "end")
@@ -198,10 +201,10 @@ public sealed partial class TemplateSyntaxValidator
             return true;
         }
 
-        string[] mistakes = ["starts", "begin", "ends", "finish", "stop", "for", "each", "loop"];
+        string[] mistakes = ["starts", "begin", "ends", "finish", "stop", "for", "each", "loop", "join"];
         if (mistakes.Contains(lower))
         {
-            hint = "Invalid keyword — use ArrayStart / ArrayEnd";
+            hint = "Invalid keyword — use ArrayStart / ArrayEnd / JoinStart / JoinEnd";
             return true;
         }
 

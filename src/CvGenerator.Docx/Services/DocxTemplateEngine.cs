@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CvGenerator.Core.Services;
 using CvGenerator.Docx.Internal;
 using DocumentFormat.OpenXml;
@@ -57,8 +58,201 @@ public sealed class DocxTemplateEngine
         Stack<LoopFrame> loops,
         IssueCollector issues)
     {
+        // Block loops first so nested aliases (exp / skill) are on the stack, then
+        // same-paragraph loops: "Technology Stack: ${ArrayStart ...}${item}, ${ArrayEnd ...}"
         ExpandLoops(container, part, root, loops, issues);
+        ExpandInlineLoops(container, part, root, loops, issues);
         ReplacePlaceholders(container, part, root, loops, issues);
+    }
+
+    private void ExpandInlineLoops(
+        OpenXmlElement container,
+        OpenXmlPart part,
+        JsonElement root,
+        Stack<LoopFrame> loops,
+        IssueCollector issues)
+    {
+        foreach (var para in container.Descendants<Paragraph>().ToList())
+            ExpandInlineLoopsInParagraph(para, part, root, loops, issues);
+    }
+
+    private void ExpandInlineLoopsInParagraph(
+        Paragraph paragraph,
+        OpenXmlPart part,
+        JsonElement root,
+        Stack<LoopFrame> loops,
+        IssueCollector issues)
+    {
+        var guard = 0;
+        while (guard++ < 64 &&
+               TryFindInlineLoop(
+                   RunTextMerger.GetParagraphText(paragraph),
+                   out var startMatch,
+                   out var endMatch,
+                   out var marker))
+        {
+            var text = RunTextMerger.GetParagraphText(paragraph);
+            var innerStart = startMatch.Index + startMatch.Length;
+            var innerLength = Math.Max(0, endMatch.Index - innerStart);
+            var inner = text.Substring(innerStart, innerLength);
+            var replaceStart = startMatch.Index;
+            var replaceLength = endMatch.Index + endMatch.Length - startMatch.Index;
+
+            if (!TryResolveArrayItems(
+                    root,
+                    loops,
+                    marker.Source,
+                    out var propertyName,
+                    out var items,
+                    out var coerced,
+                    out var missing))
+            {
+                issues.Warning(
+                    "MissingLoopArray",
+                    "Docx",
+                    $"Cannot resolve inline array '{marker.Source}' — removed.",
+                    marker.Source);
+                items = Array.Empty<JsonElement>();
+                propertyName = marker.Source.Contains('.')
+                    ? marker.Source[(marker.Source.LastIndexOf('.') + 1)..]
+                    : marker.Source;
+            }
+            else if (missing)
+            {
+                issues.Warning(
+                    "MissingLoopArray",
+                    "Docx",
+                    $"Inline array '{marker.Source}' missing — removed.",
+                    marker.Source);
+            }
+            else if (items.Count == 0)
+            {
+                issues.Warning(
+                    "EmptyLoopArray",
+                    "Docx",
+                    $"Inline array '{marker.Source}' is empty — removed.",
+                    marker.Source);
+            }
+            else if (coerced)
+            {
+                issues.Info(
+                    "LoopObjectCoerced",
+                    "Docx",
+                    $"Inline array '{marker.Source}' was an object; coerced to a single-item array.",
+                    marker.Source);
+            }
+
+            // ${skill}${JoinStart}, ${JoinEnd} → join with ", " and no trailing separator
+            var itemTemplate = inner;
+            var separator = "";
+            if (PlaceholderPatterns.TryExtractJoin(inner, out var body, out var sep))
+            {
+                itemTemplate = body;
+                separator = sep;
+            }
+
+            var parts = new List<string>();
+            foreach (var item in items)
+            {
+                var childLoops = CloneLoopStack(loops);
+                childLoops.Push(new LoopFrame(propertyName, marker.Alias, item));
+
+                var frag = new Paragraph(new Run(new Text(itemTemplate)
+                {
+                    Space = SpaceProcessingModeValues.Preserve
+                }));
+                ExpandInlineLoopsInParagraph(frag, part, root, childLoops, issues);
+                ReplacePlaceholdersInParagraph(frag, part, root, childLoops, issues);
+                parts.Add(RunTextMerger.GetParagraphText(frag));
+            }
+
+            RunTextMerger.ReplaceRange(
+                paragraph,
+                replaceStart,
+                replaceLength,
+                string.Join(separator, parts));
+        }
+    }
+
+    private static bool TryFindInlineLoop(
+        string text,
+        out Match startMatch,
+        out Match endMatch,
+        out ArrayMarker marker)
+    {
+        startMatch = null!;
+        endMatch = null!;
+        marker = null!;
+        if (string.IsNullOrEmpty(text))
+            return false;
+
+        Match? bestStart = null;
+        Match? bestEnd = null;
+        var bestSpan = int.MaxValue;
+
+        var starts = PlaceholderPatterns.ArrayStart().Matches(text).Cast<Match>().ToList();
+        var ends = PlaceholderPatterns.ArrayEnd().Matches(text).Cast<Match>().ToList();
+        if (starts.Count == 0 || ends.Count == 0)
+            return false;
+
+        foreach (var start in starts)
+        {
+            var source = start.Groups[1].Value;
+            var depth = 0;
+            Match? foundEnd = null;
+
+            var events = starts.Concat(ends)
+                .Where(m => m.Index > start.Index)
+                .OrderBy(m => m.Index)
+                .ThenBy(m => m.Value.Contains("ArrayEnd", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                .ToList();
+
+            foreach (var ev in events)
+            {
+                var isStart = PlaceholderPatterns.ArrayStart().IsMatch(ev.Value);
+                var evSource = isStart
+                    ? PlaceholderPatterns.ArrayStart().Match(ev.Value).Groups[1].Value
+                    : PlaceholderPatterns.ArrayEnd().Match(ev.Value).Groups[1].Value;
+                if (!evSource.Equals(source, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (isStart)
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (depth == 0)
+                {
+                    foundEnd = ev;
+                    break;
+                }
+
+                depth--;
+            }
+
+            if (foundEnd is null)
+                continue;
+
+            var span = foundEnd.Index + foundEnd.Length - start.Index;
+            // Prefer innermost (smallest) complete pair.
+            if (span < bestSpan)
+            {
+                bestSpan = span;
+                bestStart = start;
+                bestEnd = foundEnd;
+            }
+        }
+
+        if (bestStart is null || bestEnd is null)
+            return false;
+
+        startMatch = bestStart;
+        endMatch = bestEnd;
+        marker = new ArrayMarker(
+            bestStart.Groups[1].Value,
+            bestStart.Groups[2].Success ? bestStart.Groups[2].Value : null);
+        return true;
     }
 
     private void ExpandLoops(
@@ -302,6 +496,11 @@ public sealed class DocxTemplateEngine
                 continue;
 
             var name = startMarker.Source;
+
+            // Same-paragraph loops are handled by ExpandInlineLoops — skip them here.
+            if (ParagraphHasInlineEndFor(text, name, startMarker))
+                continue;
+
             var depth = 0;
             foreach (var sibling in para.ElementsAfter())
             {
@@ -335,6 +534,15 @@ public sealed class DocxTemplateEngine
         return false;
     }
 
+    private static bool ParagraphHasInlineEndFor(string text, string source, ArrayMarker startMarker)
+    {
+        // Re-check using the first ArrayStart for this source in the paragraph.
+        if (!TryFindInlineLoop(text, out var startMatch, out _, out var marker))
+            return false;
+        return marker.Source.Equals(source, StringComparison.OrdinalIgnoreCase) &&
+               startMatch.Groups[1].Value.Equals(startMarker.Source, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void ReplacePlaceholders(
         OpenXmlElement container,
         OpenXmlPart part,
@@ -343,61 +551,70 @@ public sealed class DocxTemplateEngine
         IssueCollector issues)
     {
         foreach (var paragraph in container.Descendants<Paragraph>().ToList())
+            ReplacePlaceholdersInParagraph(paragraph, part, root, loops, issues);
+    }
+
+    private void ReplacePlaceholdersInParagraph(
+        Paragraph paragraph,
+        OpenXmlPart part,
+        JsonElement root,
+        Stack<LoopFrame> loops,
+        IssueCollector issues)
+    {
+        var text = RunTextMerger.GetParagraphText(paragraph);
+        if (!text.Contains("${", StringComparison.Ordinal))
+            return;
+
+        // Still has loop markers — leave for loop expanders; don't wipe sibling fields.
+        if (PlaceholderPatterns.ArrayStart().IsMatch(text) || PlaceholderPatterns.ArrayEnd().IsMatch(text))
+            return;
+
+        RunTextMerger.ReplacePlaceholders(paragraph, part, inner =>
         {
-            var text = RunTextMerger.GetParagraphText(paragraph);
-            if (!text.Contains("${", StringComparison.Ordinal))
-                continue;
-
-            if (PlaceholderPatterns.IsArrayStart(text, out ArrayMarker _) ||
-                PlaceholderPatterns.IsArrayEnd(text, out ArrayMarker _))
-                continue;
-
-            RunTextMerger.ReplacePlaceholders(paragraph, part, inner =>
+            if (PlaceholderPatterns.TryParseLoopReference(inner, out var loopRef))
             {
-                if (PlaceholderPatterns.TryParseLoopReference(inner, out var loopRef))
+                if (!TryResolveFrameChain(loops, loopRef.Chain, out var item))
                 {
-                    if (!TryResolveFrameChain(loops, loopRef.Chain, out var item))
-                    {
-                        issues.Warning(
-                            "OrphanLoopField",
-                            "Docx",
-                            $"Loop field ${{{inner}}} has no matching active ArrayStart chain — empty.",
-                            inner);
-                        return string.Empty;
-                    }
-
-                    return FormatItemValue(item, loopRef.FieldPath, inner, issues);
-                }
-
-                if (TryResolveAliasReference(loops, inner, out var aliasItem, out var aliasField))
-                    return FormatItemValue(aliasItem, aliasField, inner, issues);
-
-                if (inner.StartsWith("ArrayStart", StringComparison.OrdinalIgnoreCase) ||
-                    inner.StartsWith("ArrayEnd", StringComparison.OrdinalIgnoreCase))
+                    issues.Warning(
+                        "OrphanLoopField",
+                        "Docx",
+                        $"Loop field ${{{inner}}} has no matching active ArrayStart chain — empty.",
+                        inner);
                     return string.Empty;
-
-                if (_paths.TryResolveValue(root, inner.Trim(), out var rootValue))
-                {
-                    if (string.IsNullOrEmpty(rootValue))
-                    {
-                        issues.Warning(
-                            "EmptyOptionalField",
-                            "Docx",
-                            $"Field '{inner.Trim()}' is empty.",
-                            inner.Trim());
-                    }
-
-                    return rootValue;
                 }
 
-                issues.Warning(
-                    "UnresolvedPlaceholder",
-                    "Docx",
-                    $"Unresolved placeholder ${{{inner.Trim()}}} — empty.",
-                    inner.Trim());
+                return FormatItemValue(item, loopRef.FieldPath, inner, issues);
+            }
+
+            if (TryResolveAliasReference(loops, inner, out var aliasItem, out var aliasField))
+                return FormatItemValue(aliasItem, aliasField, inner, issues);
+
+            if (inner.StartsWith("ArrayStart", StringComparison.OrdinalIgnoreCase) ||
+                inner.StartsWith("ArrayEnd", StringComparison.OrdinalIgnoreCase) ||
+                PlaceholderPatterns.IsJoinKeyword(inner))
                 return string.Empty;
-            });
-        }
+
+            if (_paths.TryResolveValue(root, inner.Trim(), out var rootValue))
+            {
+                if (string.IsNullOrEmpty(rootValue))
+                {
+                    issues.Warning(
+                        "EmptyOptionalField",
+                        "Docx",
+                        $"Field '{inner.Trim()}' is empty.",
+                        inner.Trim());
+                }
+
+                return rootValue;
+            }
+
+            issues.Warning(
+                "UnresolvedPlaceholder",
+                "Docx",
+                $"Unresolved placeholder ${{{inner.Trim()}}} — empty.",
+                inner.Trim());
+            return string.Empty;
+        });
     }
 
     private string FormatItemValue(

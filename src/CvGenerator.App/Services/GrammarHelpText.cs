@@ -60,17 +60,28 @@ Notes:
   - Everything between the markers is repeated per item; styles are kept.
 
 
+2b) Join lists without a trailing comma
+---------------------------------------
+Wrong (trailing comma):
+  Technology Stack: ${ArrayStart exp.skills skill}${skill}, ${ArrayEnd exp.skills}
+  → React, Node.js,
+
+Correct:
+  Technology Stack: ${ArrayStart exp.skills skill}${skill}${JoinStart}, ${JoinEnd}${ArrayEnd exp.skills}
+  → React, Node.js
+
+  ${ArrayStart skills}${skills_i}${JoinStart}, ${JoinEnd}${ArrayEnd skills}
+
+Notes:
+  - Put the separator only between ${JoinStart} and ${JoinEnd}.
+  - It is inserted between items, never after the last item.
+
+
 3) Nested arrays
 ----------------
 With aliases:
   ${ArrayStart skills skill}
-  ${skill.category}
-  ${ArrayStart skill.detail d}
-  - ${d.name} (${d.level})
-  ${ArrayEnd skill.detail}
-  ${ArrayStart skill.tags tag}
-  #${tag}
-  ${ArrayEnd skill.tags}
+  ${skill.category}: ${ArrayStart skill.detail detail}${detail}${JoinStart}, ${JoinEnd}${ArrayEnd skill.detail}
   ${ArrayEnd skills}
 
 Classic (_i) still works:
@@ -145,6 +156,7 @@ Artifacts written there:
   ${ArrayStart name}              begin loop (classic)
   ${ArrayStart name alias}        begin loop with iterate alias
   ${ArrayEnd name}                end loop
+  ${JoinStart}...${JoinEnd}       separator between items only
   ${name_i.field}                 classic field on loop item
   ${alias.field}                  field via iterate alias
   ${alias}                        scalar item via alias

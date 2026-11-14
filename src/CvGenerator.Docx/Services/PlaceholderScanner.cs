@@ -55,12 +55,7 @@ public sealed class PlaceholderScanner
                 continue;
             }
 
-            ordered.Add(new PlaceholderInfo
-            {
-                Token = raw,
-                Kind = PlaceholderPatterns.TryParseLoopReference(inner, out _) ? "loop-field" : "simple",
-                JsonPath = inner
-            });
+            ordered.Add(ParseNonArrayPlaceholder(raw, inner));
         }
 
         var scoped = AliasPathNormalizer.AssignScopedPaths(ordered);
@@ -100,15 +95,28 @@ public sealed class PlaceholderScanner
                 continue;
             }
 
-            ordered.Add(new PlaceholderInfo
-            {
-                Token = raw,
-                Kind = PlaceholderPatterns.TryParseLoopReference(inner, out _) ? "loop-field" : "simple",
-                JsonPath = inner
-            });
+            ordered.Add(ParseNonArrayPlaceholder(raw, inner));
         }
 
         return AliasPathNormalizer.AssignScopedPaths(ordered);
+    }
+
+    private static PlaceholderInfo ParseNonArrayPlaceholder(string raw, string inner)
+    {
+        if (PlaceholderPatterns.IsJoinKeyword(inner))
+        {
+            var kind = inner.Equals("JoinStart", StringComparison.OrdinalIgnoreCase)
+                ? "join-start"
+                : "join-end";
+            return new PlaceholderInfo { Token = raw, Kind = kind, JsonPath = kind };
+        }
+
+        return new PlaceholderInfo
+        {
+            Token = raw,
+            Kind = PlaceholderPatterns.TryParseLoopReference(inner, out _) ? "loop-field" : "simple",
+            JsonPath = inner
+        };
     }
 
     private static string ExtractAllText(WordprocessingDocument doc)

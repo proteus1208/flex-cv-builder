@@ -23,6 +23,13 @@ internal static partial class PlaceholderPatterns
         RegexOptions.IgnoreCase)]
     public static partial Regex ArrayEnd();
 
+    // ${JoinStart}separator${JoinEnd} — separator only between array items (no trailing)
+    [GeneratedRegex(@"\$\{\s*JoinStart\s*\}", RegexOptions.IgnoreCase)]
+    public static partial Regex JoinStart();
+
+    [GeneratedRegex(@"\$\{\s*JoinEnd\s*\}", RegexOptions.IgnoreCase)]
+    public static partial Regex JoinEnd();
+
     [GeneratedRegex(@"\$\{([^{}]+)\}")]
     public static partial Regex AnyPlaceholder();
 
@@ -181,6 +188,39 @@ internal static partial class PlaceholderPatterns
         => value.Length > 0
            && (char.IsLetter(value[0]) || value[0] == '_')
            && value.All(c => char.IsLetterOrDigit(c) || c == '_');
+
+    public static bool IsJoinStart(string text) => JoinStart().IsMatch(text);
+    public static bool IsJoinEnd(string text) => JoinEnd().IsMatch(text);
+
+    public static bool IsJoinKeyword(string inner)
+    {
+        var t = inner.Trim();
+        return t.Equals("JoinStart", StringComparison.OrdinalIgnoreCase) ||
+               t.Equals("JoinEnd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ${item}${JoinStart}, ${JoinEnd} → body=${item}, separator=", "
+    /// </summary>
+    public static bool TryExtractJoin(
+        string loopBody,
+        out string itemTemplate,
+        out string separator)
+    {
+        itemTemplate = loopBody;
+        separator = "";
+        var start = JoinStart().Match(loopBody);
+        if (!start.Success)
+            return false;
+
+        var end = JoinEnd().Match(loopBody, start.Index + start.Length);
+        if (!end.Success)
+            return false;
+
+        separator = loopBody[(start.Index + start.Length)..end.Index];
+        itemTemplate = loopBody[..start.Index] + loopBody[(end.Index + end.Length)..];
+        return true;
+    }
 
     public static bool IsLoopField(string inner)
         => TryParseLoopReference(inner, out _);

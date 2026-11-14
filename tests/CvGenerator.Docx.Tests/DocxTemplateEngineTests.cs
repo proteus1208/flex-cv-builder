@@ -134,6 +134,82 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void Inline_ArrayStart_End_on_same_paragraph_expands()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart experience exp}"))));
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "Stack: ${ArrayStart exp.skills skill}${skill}${JoinStart}, ${JoinEnd}${ArrayEnd exp.skills}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd experience}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "experience": [
+                { "skills": ["React", "Node.js"] }
+              ]
+            }
+            """);
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, new IssueCollector());
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Stack: React, Node.js", text);
+            Assert.DoesNotContain("Node.js,", text);
+            Assert.DoesNotContain("ArrayStart", text);
+            Assert.DoesNotContain("${skill}", text);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
+    public void Inline_nested_skill_detail_with_reused_alias()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart skills skill}"))));
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "${skill.category}: ${ArrayStart skill.detail detail}${detail}${JoinStart}, ${JoinEnd}${ArrayEnd skill.detail}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd skills}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "skills": [
+                { "category": "Frontend", "detail": ["React", "CSS"] }
+              ]
+            }
+            """);
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, new IssueCollector());
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Frontend: React, CSS", text);
+            Assert.DoesNotContain("CSS,", text);
+            Assert.DoesNotContain("ArrayStart", text);
+            Assert.DoesNotContain("${skill.category}", text);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
     public void ArrayStart_with_iterate_alias_uses_alias_instead_of_name_i()
     {
         var template = CreateTempDocx(doc =>

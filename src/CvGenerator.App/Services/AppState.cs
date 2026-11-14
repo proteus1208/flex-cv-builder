@@ -227,9 +227,16 @@ public sealed class AppState : IDisposable
 
         foreach (var p in Placeholders)
         {
-            if (p.Kind is "array-start" or "array-end")
+            if (p.Kind is "array-start" or "array-end" or "join-start" or "join-end")
             {
-                list.Add(new PlaceholderBinding(p, "marker", p.Kind == "array-start" ? "loop start" : "loop end"));
+                var label = p.Kind switch
+                {
+                    "array-start" => "loop start",
+                    "array-end" => "loop end",
+                    "join-start" => "join start",
+                    _ => "join end"
+                };
+                list.Add(new PlaceholderBinding(p, "marker", label));
                 continue;
             }
 

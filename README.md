@@ -34,6 +34,7 @@ The output root is remembered in `%AppData%/CvGenerator/settings.json`.
 | `${ArrayStart experience exp}` … `${exp.title}` | Same loop with an **iterate alias** — use `${exp.field}` instead of `${experience_i.field}` |
 | `${ArrayStart skill.detail d}` … `${d.name}` | Nested loop via parent alias |
 | `${ArrayStart skills_i.detail}` … `${skills_i.detail_i.name}` | Nested loop (classic parent-qualified `_i` form) |
+| `${item}${JoinStart}, ${JoinEnd}` inside a loop | Join items with `, ` and **no trailing separator** |
 
 Nested loops are supported. Prefer **parent-qualified** names (`skills_i.detail`) so nested starts match your JSON clearly; relative names (`${ArrayStart detail}` inside a skills loop) still work. Template styles (font, color, alignment, borders) are preserved; only placeholder text is replaced.
 
