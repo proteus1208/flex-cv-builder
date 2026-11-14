@@ -87,7 +87,9 @@
             }
 
             <div class="json-editor-wrap">
-                <pre class="json-gutter" aria-hidden="true">@JsonLineNumbers</pre>
+                <div class="json-gutter" aria-hidden="true" style="@JsonGutterWidthStyle">
+                    <div class="json-gutter-inner">@JsonLineNumbers</div>
+                </div>
                 <div class="json-code">
                     <pre class="json-highlight" aria-hidden="true">@((MarkupString)State.JsonHighlightHtml)</pre>
                     <textarea class="json-editor"
@@ -317,10 +319,12 @@
         StateHasChanged();
     }
 
-    private void OnJsonChanged()
+    private async Task OnJsonChanged()
     {
         State.RefreshPreviewAndLiveValidation();
         StateHasChanged();
+        try { await JS.InvokeVoidAsync("cvSyncJsonScroll", _jsonEditor); }
+        catch { /* ignore */ }
     }
 
     private void OnTemplateChanged(ChangeEventArgs e)
@@ -332,7 +336,7 @@
     private void OpenOutput() => State.OpenLastOutput();
     private void ClearIssues() => State.ClearIssues();
 
-    private string JsonLineNumbers
+    private int JsonLineCount
     {
         get
         {
@@ -344,6 +348,15 @@
                     lines++;
             }
 
+            return lines;
+        }
+    }
+
+    private string JsonLineNumbers
+    {
+        get
+        {
+            var lines = JsonLineCount;
             var sb = new System.Text.StringBuilder(lines * 4);
             for (var i = 1; i <= lines; i++)
             {
@@ -352,6 +365,17 @@
             }
 
             return sb.ToString();
+        }
+    }
+
+    private string JsonGutterWidthStyle
+    {
+        get
+        {
+            // VS Code-like: grow with digit count + comfortable padding-x
+            var digits = Math.Max(2, JsonLineCount.ToString().Length);
+            var ch = digits + 2; // extra breathing room
+            return $"flex-basis: calc({ch}ch + 1.6rem); width: calc({ch}ch + 1.6rem);";
         }
     }
 

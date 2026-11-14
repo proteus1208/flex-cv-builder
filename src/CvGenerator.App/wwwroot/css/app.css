@@ -286,6 +286,7 @@ button, input, select, textarea {
   position: relative;
   flex: 1;
   min-height: 220px;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #fff;
@@ -296,22 +297,34 @@ button, input, select, textarea {
 }
 
 .json-gutter {
-  flex: 0 0 3rem;
+  flex: 0 0 auto;
+  width: calc(3ch + 1.6rem);
   margin: 0;
-  padding: 0.85rem 0.45rem 0.85rem 0.55rem;
+  padding: 0;
   border: 0;
-  border-right: 1px solid var(--line);
-  background: #f3f6f5;
-  color: var(--muted);
+  border-right: 1px solid #e2e8e6;
+  background: #f7f8f7;
+  color: #8b9aa3;
   font-family: var(--mono);
   font-size: 0.82rem;
   line-height: 1.5;
   text-align: right;
-  white-space: pre;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   pointer-events: none;
+  position: relative;
+  z-index: 2;
+}
+
+.json-gutter-inner {
+  display: block;
+  padding: 0.85rem 0.85rem 2rem 0.75rem; /* padding-x like VS Code gutter */
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  box-sizing: border-box;
+  will-change: transform;
 }
 
 .json-code {
@@ -319,6 +332,8 @@ button, input, select, textarea {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  height: auto;
+  align-self: stretch;
 }
 
 .json-highlight,
@@ -328,7 +343,7 @@ button, input, select, textarea {
   margin: 0;
   width: 100%;
   height: 100%;
-  padding: 0.85rem;
+  padding: 0.85rem 1rem 2rem 0.9rem;
   border: 0;
   font-family: var(--mono);
   font-size: 0.82rem;
@@ -337,6 +352,7 @@ button, input, select, textarea {
   word-wrap: break-word;
   overflow-wrap: break-word;
   tab-size: 2;
+  box-sizing: border-box;
 }
 
 .json-highlight {
