@@ -9,4 +9,7 @@
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
     <ProjectReference Include="..\CvGenerator.Core\CvGenerator.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="CvGenerator.Docx.Tests" />
+  </ItemGroup>
 </Project>

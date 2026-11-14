@@ -26,18 +26,18 @@ public sealed class DocxTemplateEngine
             }
 
             var stack = new Stack<LoopFrame>();
-            ProcessContainer(doc.MainDocumentPart.Document.Body, root, stack, issues);
+            ProcessContainer(doc.MainDocumentPart.Document.Body, doc.MainDocumentPart, root, stack, issues);
 
             foreach (var header in doc.MainDocumentPart.HeaderParts)
             {
                 if (header.Header != null)
-                    ProcessContainer(header.Header, root, new Stack<LoopFrame>(), issues);
+                    ProcessContainer(header.Header, header, root, new Stack<LoopFrame>(), issues);
             }
 
             foreach (var footer in doc.MainDocumentPart.FooterParts)
             {
                 if (footer.Footer != null)
-                    ProcessContainer(footer.Footer, root, new Stack<LoopFrame>(), issues);
+                    ProcessContainer(footer.Footer, footer, root, new Stack<LoopFrame>(), issues);
             }
 
             doc.MainDocumentPart.Document.Save();
@@ -50,16 +50,18 @@ public sealed class DocxTemplateEngine
 
     private void ProcessContainer(
         OpenXmlElement container,
+        OpenXmlPart part,
         JsonElement root,
         Stack<LoopFrame> loops,
         IssueCollector issues)
     {
-        ExpandLoops(container, root, loops, issues);
-        ReplacePlaceholders(container, root, loops, issues);
+        ExpandLoops(container, part, root, loops, issues);
+        ReplacePlaceholders(container, part, root, loops, issues);
     }
 
     private void ExpandLoops(
         OpenXmlElement container,
+        OpenXmlPart part,
         JsonElement root,
         Stack<LoopFrame> loops,
         IssueCollector issues)
@@ -120,7 +122,7 @@ public sealed class DocxTemplateEngine
 
                 var childLoops = CloneLoopStack(loops);
                 childLoops.Push(new LoopFrame(arrayName, item));
-                ProcessContainer(temp, root, childLoops, issues);
+                ProcessContainer(temp, part, root, childLoops, issues);
 
                 while (temp.ChildElements.Count > 0)
                 {
@@ -198,6 +200,7 @@ public sealed class DocxTemplateEngine
 
     private void ReplacePlaceholders(
         OpenXmlElement container,
+        OpenXmlPart part,
         JsonElement root,
         Stack<LoopFrame> loops,
         IssueCollector issues)
@@ -212,7 +215,7 @@ public sealed class DocxTemplateEngine
             if (PlaceholderPatterns.IsArrayStart(text, out _) || PlaceholderPatterns.IsArrayEnd(text, out _))
                 continue;
 
-            RunTextMerger.ReplacePlaceholders(paragraph, inner =>
+            RunTextMerger.ReplacePlaceholders(paragraph, part, inner =>
             {
                 if (PlaceholderPatterns.IsLoopField(inner, out var arrayName, out var fieldPath))
                 {

@@ -48,6 +48,26 @@ ${experience_i.title} — ${experience_i.company}
 ${ArrayEnd experience}
 ```
 
+## Bold and hyperlinks inside JSON values
+
+Use lightweight markup in string fields:
+
+| Markup | Result |
+| --- | --- |
+| `**text**` | Bold |
+| `[label](https://example.com)` | Clickable hyperlink |
+
+```json
+{
+  "summary": "Shipped **PDF** export and **DOCX** merge",
+  "linkedin": "[Cody Lee Berry](https://linkedin.com/in/example)"
+}
+```
+
+Template tip: you can also make the whole `${placeholder}` bold/colored in Word — that style is kept as the base, and `**...**` / links add on top.
+
+Links must be `http`, `https`, or `mailto`.
+
 ## Scripts
 
 **Windows (PowerShell):**
