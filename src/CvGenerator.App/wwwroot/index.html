@@ -16,17 +16,10 @@
     <script>
       window.cvSyncJsonScroll = function (el) {
         if (!el) return;
-        var code = el.parentElement; // .json-code
-        if (!code) return;
-        var highlight = code.querySelector('.json-highlight');
-        if (highlight) {
+        var highlight = el.previousElementSibling;
+        if (highlight && highlight.classList.contains('json-highlight')) {
           highlight.scrollTop = el.scrollTop;
           highlight.scrollLeft = el.scrollLeft;
-        }
-        var wrap = code.parentElement; // .json-editor-wrap
-        var gutterInner = wrap && wrap.querySelector('.json-gutter-inner');
-        if (gutterInner) {
-          gutterInner.style.transform = 'translateY(' + (-el.scrollTop) + 'px)';
         }
       };
 

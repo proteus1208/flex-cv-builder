@@ -87,19 +87,14 @@
             }
 
             <div class="json-editor-wrap">
-                <div class="json-gutter" aria-hidden="true" style="@JsonGutterWidthStyle">
-                    <div class="json-gutter-inner">@JsonLineNumbers</div>
-                </div>
-                <div class="json-code">
-                    <pre class="json-highlight" aria-hidden="true">@((MarkupString)State.JsonHighlightHtml)</pre>
-                    <textarea class="json-editor"
-                              @ref="_jsonEditor"
-                              @bind="State.JsonText"
-                              @bind:event="oninput"
-                              @bind:after="OnJsonChanged"
-                              @onscroll="OnJsonScroll"
-                              spellcheck="false"></textarea>
-                </div>
+                <pre class="json-highlight" aria-hidden="true">@((MarkupString)State.JsonHighlightHtml)</pre>
+                <textarea class="json-editor"
+                          @ref="_jsonEditor"
+                          @bind="State.JsonText"
+                          @bind:event="oninput"
+                          @bind:after="OnJsonChanged"
+                          @onscroll="OnJsonScroll"
+                          spellcheck="false"></textarea>
             </div>
         </section>
 
@@ -335,49 +330,6 @@
     private async Task GenerateAll() => await State.GenerateAllAsync();
     private void OpenOutput() => State.OpenLastOutput();
     private void ClearIssues() => State.ClearIssues();
-
-    private int JsonLineCount
-    {
-        get
-        {
-            var text = State.JsonText ?? "";
-            var lines = 1;
-            for (var i = 0; i < text.Length; i++)
-            {
-                if (text[i] == '\n')
-                    lines++;
-            }
-
-            return lines;
-        }
-    }
-
-    private string JsonLineNumbers
-    {
-        get
-        {
-            var lines = JsonLineCount;
-            var sb = new System.Text.StringBuilder(lines * 4);
-            for (var i = 1; i <= lines; i++)
-            {
-                if (i > 1) sb.Append('\n');
-                sb.Append(i);
-            }
-
-            return sb.ToString();
-        }
-    }
-
-    private string JsonGutterWidthStyle
-    {
-        get
-        {
-            // VS Code-like: grow with digit count + comfortable padding-x
-            var digits = Math.Max(2, JsonLineCount.ToString().Length);
-            var ch = digits + 2; // extra breathing room
-            return $"flex-basis: calc({ch}ch + 1.6rem); width: calc({ch}ch + 1.6rem);";
-        }
-    }
 
     private async Task OnJsonScroll(EventArgs _)
     {
