@@ -143,13 +143,13 @@ public sealed class PdfConversionService
         Directory.CreateDirectory(outputDirectory);
         var resumePdf = Path.Combine(outputDirectory, "resume.pdf");
 
-        // Prefer Microsoft Word on Windows — keeps DOCX fonts. Tests: CVGEN_SKIP_WORD_PDF=1
+        // Standard publisher for DOCX→PDF on Windows is Microsoft Word
+        // (File → Save As → PDF / ExportAsFixedFormat). LibreOffice is fallback only —
+        // it often drops shapes/bars and substitutes fonts.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
             !IsWordPdfSkipped())
         {
-            // Never open resume.docx in Word — a stuck Word dialog locks it (white/slow open).
-            // Convert a temp copy, then force-kill only Word processes we started.
-            if (TryConvertWithWordIsolated(docxPath, resumePdf, issues))
+            if (TryConvertWithWord(docxPath, resumePdf, issues))
                 return resumePdf;
         }
 
@@ -159,7 +159,7 @@ public sealed class PdfConversionService
             issues.Error(
                 "LibreOfficeMissing",
                 "Pdf",
-                "LibreOffice (soffice.exe) not found. Install LibreOffice, or install Microsoft Word for best PDF font match.");
+                "Word PDF export failed and LibreOffice (soffice.exe) was not found. Fix Word automation or install LibreOffice.");
             return string.Empty;
         }
 
@@ -243,7 +243,7 @@ public sealed class PdfConversionService
             issues.Warning(
                 "PdfViaLibreOffice",
                 "Pdf",
-                "PDF via LibreOffice. Fonts can still look different from Word (e.g. Calibri→Carlito) unless those exact fonts are installed. Install Microsoft Word for the closest match, or install the template fonts on this PC.");
+                "PDF via LibreOffice (not Word). Bars/shapes and fonts often differ from the DOCX. Close stuck Word dialogs, then regenerate so Word Save-As-PDF can run.");
 
             return resumePdf;
         }
@@ -261,37 +261,38 @@ public sealed class PdfConversionService
             StringComparison.Ordinal);
 
     /// <summary>
-    /// Out-of-process Word via cscript on a temp copy of the DOCX.
-    /// Avoids locking resume.docx and avoids in-process COM modal dialogs in the WPF host.
+    /// Uses Word's built-in PDF publisher (same as File → Save As → PDF) on a temp copy.
+    /// Tries 32-bit cscript first — Office 2016 is usually 32-bit and 64-bit cscript cannot create it.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static bool TryConvertWithWordIsolated(string docxPath, string pdfPath, IssueCollector issues)
+    private static bool TryConvertWithWord(string docxPath, string pdfPath, IssueCollector issues)
     {
         var workDir = Path.Combine(Path.GetTempPath(), "CvGenerator-word-" + Guid.NewGuid().ToString("N"));
         var scriptPath = Path.Combine(workDir, "export.vbs");
+        var statusPath = Path.Combine(workDir, "status.txt");
         var tempDocx = Path.Combine(workDir, "source.docx");
         var tempPdf = Path.Combine(workDir, "out.pdf");
         var beforePids = SnapshotWordPids();
+        var attemptLog = new StringBuilder();
 
         try
         {
             Directory.CreateDirectory(workDir);
             File.Copy(docxPath, tempDocx, overwrite: true);
             TryDelete(pdfPath);
-            TryDelete(tempPdf);
-
-            WriteWordExportScript(scriptPath, tempDocx, tempPdf);
+            WriteWordExportScript(scriptPath, tempDocx, tempPdf, statusPath);
 
             foreach (var cscript in EnumerateCscriptHosts())
             {
-                // Any leftover Word from a previous attempt still blocks Quit with dialogs.
                 KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
-
                 TryDelete(tempPdf);
+                TryDelete(statusPath);
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = cscript,
-                    ArgumentList = { "//nologo", "//T:90", scriptPath },
+                    // No //T — Word 2016 cold start can exceed 90s; we enforce timeout ourselves.
+                    ArgumentList = { "//nologo", scriptPath },
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
@@ -301,40 +302,56 @@ public sealed class PdfConversionService
 
                 using var process = Process.Start(psi);
                 if (process is null)
-                    continue;
-
-                if (!process.WaitForExit(95_000))
                 {
-                    try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-                    KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+                    attemptLog.AppendLine($"{cscript}: failed to start");
                     continue;
                 }
 
-                // Always tear down Word we started — dialogs make Quit hang otherwise.
+                if (!process.WaitForExit(180_000))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                    KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+                    attemptLog.AppendLine($"{cscript}: timed out after 180s");
+                    continue;
+                }
+
+                // Drain pipes after exit to avoid blocking the child while running.
+                var stderrText = "";
+                try { stderrText = process.StandardError.ReadToEnd(); } catch { /* ignore */ }
+
                 KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
+
+                var status = File.Exists(statusPath) ? File.ReadAllText(statusPath).Trim() : "(no status)";
+                attemptLog.AppendLine($"{cscript}: exit={process.ExitCode}; {status}");
+                if (!string.IsNullOrWhiteSpace(stderrText))
+                    attemptLog.AppendLine(stderrText.Trim());
 
                 if (process.ExitCode == 0 && File.Exists(tempPdf) && new FileInfo(tempPdf).Length > 0)
                 {
                     File.Copy(tempPdf, pdfPath, overwrite: true);
-                    issues.Info("PdfViaWord", "Pdf", "PDF exported via Microsoft Word (fonts match the DOCX).");
+                    issues.Info(
+                        "PdfViaWord",
+                        "Pdf",
+                        "PDF published via Microsoft Word (File → Save As → PDF). Layout/fonts match the DOCX.");
                     return true;
                 }
             }
 
-            issues.Info(
+            issues.Warning(
                 "WordPdfUnavailable",
                 "Pdf",
-                "Word PDF export failed or timed out — falling back to LibreOffice.");
+                "Word Save-As-PDF failed — falling back to LibreOffice (bars/shapes may be missing).",
+                detail: attemptLog.ToString().Trim());
             return false;
         }
         catch (Exception ex)
         {
             KillWordPids(SnapshotWordPids().Except(beforePids).ToHashSet());
-            issues.Info(
+            issues.Warning(
                 "WordPdfUnavailable",
                 "Pdf",
-                "Word PDF export failed — falling back to LibreOffice.",
-                detail: ex.Message);
+                "Word Save-As-PDF failed — falling back to LibreOffice (bars/shapes may be missing).",
+                detail: ex.ToString());
             return false;
         }
         finally
@@ -345,58 +362,98 @@ public sealed class PdfConversionService
     }
 
     [SupportedOSPlatform("windows")]
-    private static void WriteWordExportScript(string scriptPath, string docxPath, string pdfPath)
+    private static void WriteWordExportScript(string scriptPath, string docxPath, string pdfPath, string statusPath)
     {
         var docxEsc = EscapeVbs(docxPath);
         var pdfEsc = EscapeVbs(pdfPath);
-        // Silent open: no conversion/encoding dialogs; never touch the real resume.docx.
-        // Saved=True + Close(0) avoids "save changes?" and stuck Quit dialogs.
+        var statusEsc = EscapeVbs(statusPath);
+
+        // Same engine as Word UI: File → Save As → PDF (wdFormatPDF = 17).
+        // Fallback: ExportAsFixedFormat. Always operate on a temp copy.
         var script = $$"""
+            Option Explicit
             On Error Resume Next
-            Dim w, docs, d, i
+
+            Dim fso, statusFile, w, d, errOpen, errSave, errExport
+            Set fso = CreateObject("Scripting.FileSystemObject")
+            Set statusFile = fso.CreateTextFile("{{statusEsc}}", True)
+            statusFile.WriteLine "start"
+
             Set w = CreateObject("Word.Application")
             If Err.Number <> 0 Or w Is Nothing Then
+              statusFile.WriteLine "create_failed err=" & Err.Number & " " & Err.Description
+              statusFile.Close
               WScript.Quit 2
             End If
+            statusFile.WriteLine "word_created version=" & w.Version
 
             w.Visible = False
             w.DisplayAlerts = 0
             w.ScreenUpdating = False
+            Err.Clear
             w.AutomationSecurity = 3
             Err.Clear
 
-            Set docs = w.Documents
-            Set d = docs.Open("{{docxEsc}}", False, True, False, , , False, , , , , False, False, , True)
-            If Err.Number <> 0 Or d Is Nothing Then
+            Set d = w.Documents.Open("{{docxEsc}}", False, True, False)
+            errOpen = Err.Number
+            If errOpen <> 0 Or d Is Nothing Then
+              statusFile.WriteLine "open_failed err=" & errOpen & " " & Err.Description
               Call ForceQuit(w)
+              statusFile.Close
               WScript.Quit 3
             End If
+            statusFile.WriteLine "opened"
 
             Err.Clear
-            d.ExportAsFixedFormat "{{pdfEsc}}", 17, False, 0, 0, , , 0, True, True, 0, True, False, False
-            If Err.Number <> 0 Then
-              Call SafeCloseAll(w)
-              Call ForceQuit(w)
-              WScript.Quit 4
+            d.SaveAs2 "{{pdfEsc}}", 17
+            errSave = Err.Number
+            If errSave <> 0 Or Not fso.FileExists("{{pdfEsc}}") Then
+              statusFile.WriteLine "saveas2_failed err=" & errSave & " " & Err.Description
+              Err.Clear
+              d.SaveAs "{{pdfEsc}}", 17
+              errSave = Err.Number
             End If
 
-            Call SafeCloseAll(w)
+            If errSave <> 0 Or Not fso.FileExists("{{pdfEsc}}") Then
+              statusFile.WriteLine "saveas_failed err=" & errSave & " " & Err.Description
+              Err.Clear
+              d.ExportAsFixedFormat "{{pdfEsc}}", 17, False, 0, 0
+              errExport = Err.Number
+              If errExport <> 0 Or Not fso.FileExists("{{pdfEsc}}") Then
+                statusFile.WriteLine "export_failed err=" & errExport & " " & Err.Description
+                Call SafeClose(d)
+                Call ForceQuit(w)
+                statusFile.Close
+                WScript.Quit 4
+              End If
+              statusFile.WriteLine "exported_ok"
+            Else
+              statusFile.WriteLine "saveas_ok"
+            End If
+
+            Call SafeClose(d)
             Call ForceQuit(w)
+            statusFile.WriteLine "done"
+            statusFile.Close
             WScript.Quit 0
 
-            Sub SafeCloseAll(app)
+            Sub SafeClose(doc)
+              On Error Resume Next
+              If Not doc Is Nothing Then
+                doc.Saved = True
+                doc.Close 0
+              End If
+            End Sub
+
+            Sub ForceQuit(app)
               On Error Resume Next
               Dim j, doc
+              If app Is Nothing Then Exit Sub
               For j = app.Documents.Count To 1 Step -1
                 Set doc = app.Documents(j)
                 doc.Saved = True
                 doc.Close 0
               Next
-            End Sub
-
-            Sub ForceQuit(app)
-              On Error Resume Next
-              Call SafeCloseAll(app)
               app.DisplayAlerts = 0
               app.Quit 0
             End Sub
@@ -454,11 +511,13 @@ public sealed class PdfConversionService
     private static IEnumerable<string> EnumerateCscriptHosts()
     {
         var windir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-        // Prefer native bitness first; SysWOW64 as fallback for 32-bit Office.
-        yield return Path.Combine(windir, "System32", "cscript.exe");
-        var wow = Path.Combine(windir, "SysWOW64", "cscript.exe");
-        if (File.Exists(wow))
-            yield return wow;
+        var sysWow = Path.Combine(windir, "SysWOW64", "cscript.exe");
+        var sys32 = Path.Combine(windir, "System32", "cscript.exe");
+
+        // Office 2016 is commonly 32-bit — 64-bit cscript cannot CreateObject(Word).
+        if (File.Exists(sysWow))
+            yield return sysWow;
+        yield return sys32;
     }
 
     private static string EscapeVbs(string path)
