@@ -199,8 +199,7 @@ internal static class RunTextMerger
             {
                 var rel = part.AddHyperlinkRelationship(uri, true);
                 var hyperlink = new Hyperlink { Id = rel.Id };
-                // Keep link labels on one line visually: truncate with ellipsis instead of wrapping.
-                var run = CreateRun(EllipsizeLabel(segment.Text), baseProps, RichSegmentKind.Text);
+                var run = CreateRun(segment.Text, baseProps, RichSegmentKind.Text);
                 EnsureHyperlinkStyle(run.RunProperties ??= new RunProperties());
                 hyperlink.AppendChild(run);
                 nodes.Add(hyperlink);
@@ -235,16 +234,6 @@ internal static class RunTextMerger
     {
         props.Color ??= new Color { Val = "0563C1" };
         props.Underline ??= new Underline { Val = UnderlineValues.Single };
-    }
-
-    private const int MaxHyperlinkLabelLength = 40;
-
-    private static string EllipsizeLabel(string label)
-    {
-        var text = (label ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
-        if (text.Length <= MaxHyperlinkLabelLength)
-            return text;
-        return text[..(MaxHyperlinkLabelLength - 1)] + "…";
     }
 
     private static bool IsSafeUri(string? url, out Uri uri)
