@@ -456,8 +456,12 @@ public class DocxTemplateEngineTests
         var root = Path.Combine(Path.GetTempPath(), "cvgen-all-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
-        var fakeSoffice = Path.Combine(root, "fake-soffice");
-        File.WriteAllText(fakeSoffice, "#!/bin/sh\nexit 1\n");
+        // On Windows, Word may be installed and would succeed PDF export; force LibreOffice path.
+        var previousSkipWord = Environment.GetEnvironmentVariable("CVGEN_SKIP_WORD_PDF");
+        Environment.SetEnvironmentVariable("CVGEN_SKIP_WORD_PDF", "1");
+
+        var fakeSoffice = Path.Combine(root, OperatingSystem.IsWindows() ? "fake-soffice.cmd" : "fake-soffice");
+        File.WriteAllText(fakeSoffice, OperatingSystem.IsWindows() ? "@echo off\r\nexit /b 1\r\n" : "#!/bin/sh\nexit 1\n");
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(fakeSoffice, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
@@ -489,8 +493,32 @@ public class DocxTemplateEngineTests
         }
         finally
         {
-            File.Delete(template);
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            Environment.SetEnvironmentVariable("CVGEN_SKIP_WORD_PDF", previousSkipWord);
+            try { File.Delete(template); } catch { /* ignore */ }
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, true);
+                return;
+            }
+            catch (IOException) when (attempt < 7)
+            {
+                Thread.Sleep(50 * (attempt + 1));
+            }
+            catch (UnauthorizedAccessException) when (attempt < 7)
+            {
+                Thread.Sleep(50 * (attempt + 1));
+            }
         }
     }
 

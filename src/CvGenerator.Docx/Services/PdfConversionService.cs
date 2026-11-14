@@ -144,7 +144,9 @@ public sealed class PdfConversionService
         var resumePdf = Path.Combine(outputDirectory, "resume.pdf");
 
         // Prefer Microsoft Word on Windows — it keeps DOCX fonts/styles most faithfully.
+        // Tests can set CVGEN_SKIP_WORD_PDF=1 to force the LibreOffice path.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+            !IsWordPdfSkipped() &&
             TryConvertWithWord(docxPath, resumePdf, issues))
         {
             return resumePdf;
@@ -252,6 +254,12 @@ public sealed class PdfConversionService
         }
     }
 
+    private static bool IsWordPdfSkipped()
+        => string.Equals(
+            Environment.GetEnvironmentVariable("CVGEN_SKIP_WORD_PDF"),
+            "1",
+            StringComparison.Ordinal);
+
     /// <summary>
     /// Uses late-bound Word COM when installed. Best font/style fidelity on Windows.
     /// </summary>
@@ -271,14 +279,12 @@ public sealed class PdfConversionService
             if (wordApp is null)
                 return false;
 
-            wordType.InvokeMember(
-                "Visible",
-                System.Reflection.BindingFlags.SetProperty,
-                null,
-                wordApp,
-                [false]);
+            // Suppress UI prompts that can leave Word hanging / files locked.
+            TrySet(wordApp, "Visible", false);
+            TrySet(wordApp, "DisplayAlerts", 0); // wdAlertsNone
+            TrySet(wordApp, "ScreenUpdating", false);
 
-            documents = wordType.InvokeMember(
+            documents = wordApp.GetType().InvokeMember(
                 "Documents",
                 System.Reflection.BindingFlags.GetProperty,
                 null,
@@ -288,12 +294,13 @@ public sealed class PdfConversionService
             if (documents is null)
                 return false;
 
+            // Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, ...)
             doc = documents.GetType().InvokeMember(
                 "Open",
                 System.Reflection.BindingFlags.InvokeMethod,
                 null,
                 documents,
-                [docxPath, false, true]); // FileName, ConfirmConversions, ReadOnly
+                [docxPath, false, true, false]);
 
             if (doc is null)
                 return false;
@@ -336,11 +343,32 @@ public sealed class PdfConversionService
         }
         finally
         {
-            TryCom(doc, "Close", [false]);
-            TryCom(wordApp, "Quit", null);
-            if (doc != null) Marshal.FinalReleaseComObject(doc);
-            if (documents != null) Marshal.FinalReleaseComObject(documents);
-            if (wordApp != null) Marshal.FinalReleaseComObject(wordApp);
+            // wdDoNotSaveChanges = 0 — must close before Quit or resume.docx stays locked.
+            TryCom(doc, "Close", [0]);
+            TryCom(wordApp, "Quit", [0]);
+            ReleaseCom(ref doc);
+            ReleaseCom(ref documents);
+            ReleaseCom(ref wordApp);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+    }
+
+    private static void TrySet(object target, string property, object value)
+    {
+        try
+        {
+            target.GetType().InvokeMember(
+                property,
+                System.Reflection.BindingFlags.SetProperty,
+                null,
+                target,
+                [value]);
+        }
+        catch
+        {
+            // ignore optional properties
         }
     }
 
@@ -361,5 +389,15 @@ public sealed class PdfConversionService
         {
             // ignore cleanup failures
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void ReleaseCom(ref object? com)
+    {
+        if (com is null)
+            return;
+        try { Marshal.FinalReleaseComObject(com); }
+        catch { /* ignore */ }
+        com = null;
     }
 }
