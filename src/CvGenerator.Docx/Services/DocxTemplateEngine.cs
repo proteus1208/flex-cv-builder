@@ -46,6 +46,8 @@ public sealed class DocxTemplateEngine
             // Expand theme font refs (minorHAnsi → Calibri, etc.) so PDF converters
             // (especially LibreOffice) do not pick a different substitute face.
             ThemeFontMaterializer.Materialize(doc);
+            // Word 2016 PDF export drops thin w:pBdr section bars — convert to shaded rules.
+            PdfBorderHardener.Harden(doc);
 
             doc.MainDocumentPart.Document.Save();
         }
