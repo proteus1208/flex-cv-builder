@@ -10,6 +10,10 @@ namespace CvGenerator.App;
 
 public partial class MainWindow : Window
 {
+    private readonly AppState _state;
+    private ClipboardHotKeyService? _hotKey;
+    private bool _hotKeyBusy;
+
     public MainWindow()
     {
         var baseDir = AppContext.BaseDirectory;
@@ -58,10 +62,62 @@ public partial class MainWindow : Window
         var provider = services.BuildServiceProvider();
         Resources.Add("services", provider);
 
-        var state = provider.GetRequiredService<AppState>();
-        state.Initialize(settings, settingsStore, defaultTemplates);
+        _state = provider.GetRequiredService<AppState>();
+        _state.Initialize(settings, settingsStore, defaultTemplates);
 
         InitializeComponent();
+
+        _hotKey = new ClipboardHotKeyService(this);
+        _hotKey.Activated += OnClipboardHotKey;
+        Closed += (_, _) =>
+        {
+            _hotKey?.Dispose();
+            _hotKey = null;
+        };
+    }
+
+    private async void OnClipboardHotKey()
+    {
+        if (_hotKeyBusy || _state.IsBusy)
+            return;
+
+        _hotKeyBusy = true;
+        CursorOrbWindow? orb = null;
+        try
+        {
+            string? clip = null;
+            try
+            {
+                if (Clipboard.ContainsText())
+                    clip = Clipboard.GetText();
+            }
+            catch
+            {
+                return;
+            }
+
+            if (!AppState.LooksLikeJsonObject(clip))
+                return;
+
+            orb = new CursorOrbWindow();
+            orb.Show();
+
+            var path = await _state.GenerateFromClipboardJsonAsync();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                // still finish orb animation so UI doesn't stick
+            }
+        }
+        finally
+        {
+            if (orb != null)
+            {
+                try { await orb.PlayDisappearAsync(); }
+                catch { try { orb.Close(); } catch { /* ignore */ } }
+            }
+
+            _hotKeyBusy = false;
+        }
     }
 
     private static string? FindRepoRoot(string start)

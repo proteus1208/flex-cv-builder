@@ -53,6 +53,9 @@ public class PdfBorderHardenerTests
             var bar = paragraphs[1];
             Assert.Equal("CCD7E1", bar.ParagraphProperties?.Shading?.Fill?.Value);
             Assert.Equal(LineSpacingRuleValues.Exact, bar.ParagraphProperties?.SpacingBetweenLines?.LineRule?.Value);
+            // sz=4 eighths-of-a-point → 0.5pt → 10 twips (must not inflate past authored width)
+            Assert.Equal("10", bar.ParagraphProperties?.SpacingBetweenLines?.Line?.Value);
+            Assert.Equal("60", bar.ParagraphProperties?.SpacingBetweenLines?.Before?.Value); // space=3pt → 60 twips
             Assert.Equal("Body text", bar.NextSibling<Paragraph>()?.InnerText);
         }
         finally

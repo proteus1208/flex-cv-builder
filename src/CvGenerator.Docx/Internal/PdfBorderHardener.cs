@@ -8,6 +8,7 @@ namespace CvGenerator.Docx.Internal;
 /// Word 2016 ExportAsFixedFormat often drops thin <c>w:pBdr</c> bottom borders
 /// (section bars under PROFILE / EXPERIENCE, etc.) even though they appear in the DOCX.
 /// Convert those borders into short shaded paragraphs, which Word PDF keeps reliably.
+/// Bar thickness matches the original border <c>sz</c> (eighths of a point).
 /// </summary>
 internal static class PdfBorderHardener
 {
@@ -34,7 +35,6 @@ internal static class PdfBorderHardener
 
     private static void HardenContainer(OpenXmlElement container)
     {
-        // Snapshot — we insert siblings after matching paragraphs.
         foreach (var para in container.Elements<Paragraph>().ToList())
         {
             var borders = para.ParagraphProperties?.ParagraphBorders;
@@ -44,6 +44,8 @@ internal static class PdfBorderHardener
 
             var color = ResolveColor(bottom!);
             var heightTwips = BorderHeightTwips(bottom!);
+            // w:space on borders is points of gap between text and the rule.
+            var gapTwips = BorderGapTwips(bottom!);
 
             bottom!.Remove();
             if (borders != null && !borders.ChildElements.Any())
@@ -53,8 +55,8 @@ internal static class PdfBorderHardener
                 new ParagraphProperties(
                     new SpacingBetweenLines
                     {
-                        Before = "40",
-                        After = "60",
+                        Before = gapTwips.ToString(),
+                        After = "0",
                         Line = heightTwips.ToString(),
                         LineRule = LineSpacingRuleValues.Exact
                     },
@@ -92,13 +94,22 @@ internal static class PdfBorderHardener
     }
 
     /// <summary>
-    /// OOXML border sz is eighths of a point. Twips = points * 20.
-    /// Word PDF tends to drop sub-point rules, so enforce a visible minimum.
+    /// OOXML border sz is eighths of a point. Twips = points × 20.
+    /// Preserve the authored width (e.g. sz=8 ≈ 1pt ≈ 1px at 96dpi).
     /// </summary>
     private static int BorderHeightTwips(BorderType border)
     {
-        var eighths = border.Size?.Value ?? 6;
-        var twips = (int)Math.Ceiling(eighths * 20.0 / 8.0);
-        return Math.Clamp(Math.Max(twips, 24), 24, 120); // 1.2pt .. 6pt
+        var eighths = (int)(border.Size?.Value ?? 8);
+        if (eighths < 1)
+            eighths = 1;
+        var twips = (int)Math.Round(eighths * 20.0 / 8.0, MidpointRounding.AwayFromZero);
+        return Math.Clamp(twips, 1, 120);
+    }
+
+    private static int BorderGapTwips(BorderType border)
+    {
+        // Border space is in points.
+        var points = border.Space?.Value ?? 0;
+        return Math.Clamp((int)Math.Round(points * 20.0, MidpointRounding.AwayFromZero), 0, 240);
     }
 }

@@ -588,6 +588,73 @@ public sealed class AppState : IDisposable
         }
     }
 
+    /// <summary>
+    /// Hotkey pipeline: use clipboard JSON, generate artifacts, put output folder path on clipboard.
+    /// Returns null when clipboard is not JSON or generation did not produce a folder.
+    /// </summary>
+    public async Task<string?> GenerateFromClipboardJsonAsync()
+    {
+        if (IsBusy)
+            return null;
+
+        string? clipboard = null;
+        try
+        {
+            if (System.Windows.Clipboard.ContainsText())
+                clipboard = System.Windows.Clipboard.GetText();
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (!LooksLikeJsonObject(clipboard))
+            return null;
+
+        JsonText = clipboard!.Trim();
+        RefreshPreviewAndLiveValidation();
+        Notify();
+
+        await GenerateAllAsync();
+
+        var path = LastOutputDirectory;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            return null;
+
+        try
+        {
+            System.Windows.Clipboard.SetText(path);
+        }
+        catch
+        {
+            // generation succeeded; clipboard write is best-effort
+        }
+
+        return path;
+    }
+
+    public static bool LooksLikeJsonObject(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var trimmed = text.TrimStart();
+        if (trimmed.Length == 0 || (trimmed[0] != '{' && trimmed[0] != '['))
+            return false;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            return doc.RootElement.ValueKind is
+                System.Text.Json.JsonValueKind.Object or
+                System.Text.Json.JsonValueKind.Array;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public void OpenLastOutput()
     {
         GenerationService.OpenDirectory(LastOutputDirectory);
