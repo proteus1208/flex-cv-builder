@@ -18,6 +18,40 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 dotnet test .\tests\CvGenerator.Docx.Tests\CvGenerator.Docx.Tests.csproj -c Release --nologo
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# Publish overwrites artifacts\CvGenerator\CvGenerator.exe — fail fast if it's locked
+# (usually the app is still running).
+$exe = Join-Path $Out "CvGenerator.exe"
+if (Test-Path $exe) {
+    $locked = @()
+    Get-Process -Name "CvGenerator" -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            if ($_.Path -and ([string]::Compare($_.Path, $exe, $true) -eq 0)) {
+                $locked += $_
+            }
+        } catch { }
+    }
+    if ($locked.Count -eq 0) {
+        # Path compare can fail for single-file hosts; stop any CvGenerator still alive.
+        $locked = @(Get-Process -Name "CvGenerator" -ErrorAction SilentlyContinue)
+    }
+    if ($locked.Count -gt 0) {
+        Write-Host "Stopping running CvGenerator ($($locked.Count)) so publish can overwrite $exe ..."
+        $locked | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 800
+    }
+    try {
+        [IO.File]::Open($exe, 'Open', 'ReadWrite', 'None').Dispose()
+    } catch {
+        Write-Error @"
+Cannot overwrite locked file:
+  $exe
+
+Close CvGenerator (and any Explorer preview / antivirus lock), then rerun.
+"@
+        exit 1
+    }
+}
+
 dotnet publish .\src\CvGenerator.App\CvGenerator.App.csproj `
   -c Release `
   -r win-x64 `
