@@ -10,7 +10,7 @@ namespace CvGenerator.Docx.Tests;
 public class HeaderFooterTests
 {
     [Fact]
-    public void Title_page_large_top_margin_moves_to_first_paragraph_after_expand()
+    public void Title_page_keeps_header_top_margin_and_splits_overflow_to_continuation()
     {
         var path = Path.Combine(Path.GetTempPath(), "cvgen-title-" + Guid.NewGuid().ToString("N") + ".docx");
         using (var doc = WordprocessingDocument.Create(path, WordprocessingDocumentType.Document))
@@ -23,14 +23,18 @@ public class HeaderFooterTests
 
             // Section 1 (title page): large top margin + first header only.
             // Section 2: normal top margin + default header.
+            // Many array items force the title section past one page.
             main.Document = new Document(new Body(
                 new Paragraph(new Run(new Text("${ArrayStart items}"))),
                 new Paragraph(new Run(new Text("- ${items_i}"))),
+                new Paragraph(new Run(new Text("detail line for ${items_i} with more wrapping text here"))),
+                new Paragraph(new Run(new Text("location ${items_i}"))),
                 new Paragraph(new Run(new Text("${ArrayEnd items}"))),
                 new Paragraph(
                     new ParagraphProperties(
                         new SectionProperties(
                             new HeaderReference { Type = HeaderFooterValues.First, Id = "rIdFirst" },
+                            new PageSize { Width = 12240, Height = 15840 },
                             new PageMargin
                             {
                                 Top = 2419,
@@ -45,6 +49,7 @@ public class HeaderFooterTests
                 new Paragraph(new Run(new Text("Skills"))),
                 new SectionProperties(
                     new HeaderReference { Type = HeaderFooterValues.Default, Id = "rIdDefault" },
+                    new PageSize { Width = 12240, Height = 15840 },
                     new PageMargin
                     {
                         Top = 792,
@@ -60,25 +65,37 @@ public class HeaderFooterTests
         var output = Path.ChangeExtension(path, ".out.docx");
         try
         {
-            using var json = JsonDocument.Parse("""{"items":["a","b","c","d","e","f"]}""");
+            using var json = JsonDocument.Parse(
+                """{"items":["a1","a2","a3","a4","a5","a6","a7","a8","a9","a10","a11","a12","a13","a14","a15","a16","a17","a18","a19","a20"]}""");
             new DocxTemplateEngine().Generate(path, output, json.RootElement, new IssueCollector());
 
             using var result = WordprocessingDocument.Open(output, false);
             var body = result.MainDocumentPart!.Document.Body!;
-            var breakPara = body.Elements<Paragraph>()
-                .First(p => p.ParagraphProperties?.GetFirstChild<SectionProperties>() != null);
-            var titleSect = breakPara.ParagraphProperties!.GetFirstChild<SectionProperties>()!;
-            var titleTop = titleSect.GetFirstChild<PageMargin>()!.Top!.Value;
-            Assert.Equal(792, titleTop);
+            var sectionBreaks = body.Elements<Paragraph>()
+                .Select(p => p.ParagraphProperties?.GetFirstChild<SectionProperties>())
+                .Where(s => s != null)
+                .Cast<SectionProperties>()
+                .ToList();
 
-            // Extra first-page padding moved onto the first body paragraph.
+            Assert.True(sectionBreaks.Count >= 2, "overflow should insert a continuation section break");
+
+            // First section break must still be the title page (header padding via pgMar.top).
+            var titleSect = sectionBreaks.First(s => s.GetFirstChild<TitlePage>() != null);
+            Assert.Equal(2419, titleSect.GetFirstChild<PageMargin>()!.Top!.Value);
+            Assert.Equal(
+                SectionMarkValues.NextPage,
+                titleSect.GetFirstChild<SectionType>()?.Val?.Value);
+
+            // First body paragraph must NOT receive content spacing.before hacks.
             var first = body.Elements<Paragraph>().First();
             var before = first.ParagraphProperties?.GetFirstChild<SpacingBetweenLines>()?.Before?.Value;
-            Assert.Equal((2419 - 792).ToString(), before);
+            Assert.True(string.IsNullOrEmpty(before) || before == "0" || int.Parse(before!) < 500);
 
-            // Default header wired so later pages of the title section stay empty.
+            // Later section(s) use continuation top margin (no titlePg).
+            var continuation = sectionBreaks.First(s => s.GetFirstChild<TitlePage>() is null);
+            Assert.Equal(792, continuation.GetFirstChild<PageMargin>()!.Top!.Value);
             Assert.Contains(
-                titleSect.Elements<HeaderReference>(),
+                continuation.Elements<HeaderReference>(),
                 h => h.Type?.Value == HeaderFooterValues.Default && h.Id == "rIdDefault");
         }
         finally

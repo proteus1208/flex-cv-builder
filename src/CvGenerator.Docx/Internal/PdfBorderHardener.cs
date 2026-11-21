@@ -54,6 +54,15 @@ internal static class PdfBorderHardener
             var heightPt = BorderHeightPt(bottom!);
             var gapTwips = BorderGapTwips(bottom!);
 
+            // Word draws pBdr with `space` between text and the line, then applies
+            // paragraph spacing/after BELOW the border. Moving the bar to a following
+            // VML paragraph must preserve that order — otherwise heading `after` sits
+            // above the bar and the PDF line looks shifted down.
+            var spacing = para.ParagraphProperties?.GetFirstChild<SpacingBetweenLines>();
+            var afterBelowBar = spacing?.After?.Value ?? "0";
+            if (spacing != null)
+                spacing.After = "0";
+
             // Remove pBdr so Word doesn't try (and fail) to paint the border in PDF.
             bottom!.Remove();
             if (borders != null && !borders.ChildElements.Any())
@@ -64,7 +73,7 @@ internal static class PdfBorderHardener
                     new SpacingBetweenLines
                     {
                         Before = gapTwips.ToString(),
-                        After = "0",
+                        After = afterBelowBar,
                         Line = "20",
                         LineRule = LineSpacingRuleValues.Exact
                     }),

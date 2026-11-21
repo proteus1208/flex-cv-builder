@@ -22,6 +22,7 @@ public class PdfBorderHardenerTests
                 main.Document = new Document(new Body(
                     new Paragraph(
                         new ParagraphProperties(
+                            new SpacingBetweenLines { Before = "100", After = "60" },
                             new ParagraphBorders(
                                 new BottomBorder
                                 {
@@ -44,6 +45,8 @@ public class PdfBorderHardenerTests
             var paras = outDoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().ToList();
             Assert.Equal(3, paras.Count); // heading + VML rule + body
             Assert.Null(paras[0].ParagraphProperties?.ParagraphBorders?.BottomBorder);
+            // Heading after must move below the bar (not sit above it).
+            Assert.Equal("0", paras[0].ParagraphProperties?.SpacingBetweenLines?.After?.Value);
 
             var pict = paras[1].Descendants<Picture>().FirstOrDefault();
             Assert.NotNull(pict);
@@ -52,6 +55,7 @@ public class PdfBorderHardenerTests
             // sz=9 → 9/8 = 1.125pt
             Assert.Contains("1.125pt", xml, System.StringComparison.Ordinal);
             Assert.Equal("40", paras[1].ParagraphProperties?.SpacingBetweenLines?.Before?.Value); // space=2pt
+            Assert.Equal("60", paras[1].ParagraphProperties?.SpacingBetweenLines?.After?.Value); // original after
             Assert.Equal("Body", paras[2].InnerText);
         }
         finally
