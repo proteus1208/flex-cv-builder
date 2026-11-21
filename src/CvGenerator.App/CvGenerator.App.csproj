@@ -24,4 +24,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+  <!-- Ship Templates next to the exe (debug + publish). -->
+  <ItemGroup>
+    <None Include="..\..\Templates\**\*"
+          Link="Templates\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          Condition="Exists('..\..\Templates')" />
+  </ItemGroup>
 </Project>

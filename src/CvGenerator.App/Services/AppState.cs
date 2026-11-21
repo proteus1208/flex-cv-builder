@@ -68,7 +68,9 @@ public sealed class AppState : IDisposable
         _settings = settings;
         _settingsStore = store;
         OutputRoot = settings.OutputRoot;
-        TemplatesRoot = string.IsNullOrWhiteSpace(settings.TemplatesRoot) ? templatesRoot : settings.TemplatesRoot;
+        // Templates are always relative to the running executable.
+        TemplatesRoot = templatesRoot;
+        settings.TemplatesRoot = templatesRoot;
         LibreOfficePath = settings.LibreOfficePath;
         RefreshLibreOfficeStatus();
         RefreshTemplates();

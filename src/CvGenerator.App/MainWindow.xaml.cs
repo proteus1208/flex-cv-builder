@@ -17,33 +17,23 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         var baseDir = AppContext.BaseDirectory;
-        var defaultOutput = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "Output"));
-        var defaultTemplates = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "Templates"));
 
-        // When published, use folders beside the executable.
-        var publishedOutput = Path.Combine(baseDir, "Output");
-        var publishedTemplates = Path.Combine(baseDir, "Templates");
-        if (Directory.Exists(publishedTemplates) || File.Exists(Path.Combine(baseDir, "CvGenerator.exe")))
-        {
-            defaultOutput = publishedOutput;
-            defaultTemplates = publishedTemplates;
-        }
+        // Templates always live beside the running exe (not user-configurable).
+        var templatesRoot = Path.GetFullPath(Path.Combine(baseDir, "Templates"));
+        Directory.CreateDirectory(templatesRoot);
 
-        // Prefer repo-relative folders when running from source tree.
+        // Output root may be changed by the user; default beside exe, or repo Output in dev.
+        var defaultOutput = Path.Combine(baseDir, "Output");
         var repoRoot = FindRepoRoot(baseDir);
         if (repoRoot != null)
-        {
             defaultOutput = Path.Combine(repoRoot, "Output");
-            defaultTemplates = Path.Combine(repoRoot, "Templates");
-        }
-
         Directory.CreateDirectory(defaultOutput);
-        Directory.CreateDirectory(defaultTemplates);
 
         var settingsStore = new SettingsStore();
-        var settings = settingsStore.Load(defaultOutput, defaultTemplates);
+        var settings = settingsStore.Load(defaultOutput, templatesRoot);
+        // Force exe-relative templates even if an old settings.json pointed elsewhere.
+        settings.TemplatesRoot = templatesRoot;
         Directory.CreateDirectory(settings.OutputRoot);
-        Directory.CreateDirectory(settings.TemplatesRoot);
 
         var services = new ServiceCollection();
         services.AddWpfBlazorWebView();
@@ -63,7 +53,7 @@ public partial class MainWindow : Window
         Resources.Add("services", provider);
 
         _state = provider.GetRequiredService<AppState>();
-        _state.Initialize(settings, settingsStore, defaultTemplates);
+        _state.Initialize(settings, settingsStore, templatesRoot);
 
         InitializeComponent();
 
