@@ -12,9 +12,9 @@ public sealed class OutputFolderService
 
     public string BuildPreviewPath(string outputRoot, JsonElement root, DateTime? date = null)
     {
-        var day = (date ?? DateTime.Now).ToString("yyyy-MM-dd");
-        var leaf = BuildLeafFolderName(root, out _);
-        return Path.Combine(outputRoot, day, leaf);
+        var now = date ?? DateTime.Now;
+        var leaf = BuildLeafFolderName(root, now, out _);
+        return Path.Combine(outputRoot, leaf);
     }
 
     public string CreateOutputDirectory(
@@ -23,25 +23,22 @@ public sealed class OutputFolderService
         IssueCollector issues,
         DateTime? date = null)
     {
-        var day = (date ?? DateTime.Now).ToString("yyyy-MM-dd");
-        var leaf = BuildLeafFolderName(root, out var usedFallback);
+        var now = date ?? DateTime.Now;
+        var leaf = BuildLeafFolderName(root, now, out var usedFallback);
 
         if (usedFallback)
         {
-            issues.Warning(
-                "MissingFolderFields",
+            issues.Info(
+                "FolderFromTimestamp",
                 "Folder",
-                "Missing name/role/topSkills — using fallback folder name.",
+                "No 'directory' in JSON — using date/time folder name.",
                 leaf);
         }
 
         try
         {
             Directory.CreateDirectory(outputRoot);
-            var dayDir = Path.Combine(outputRoot, day);
-            Directory.CreateDirectory(dayDir);
-
-            var candidate = Path.Combine(dayDir, leaf);
+            var candidate = Path.Combine(outputRoot, leaf);
             var unique = MakeUniqueDirectory(candidate, issues);
             Directory.CreateDirectory(unique);
             return unique;
@@ -53,69 +50,23 @@ public sealed class OutputFolderService
         }
     }
 
+    /// <summary>
+    /// Leaf folder = JSON <c>directory</c> when present; otherwise current date/time.
+    /// </summary>
     public string BuildLeafFolderName(JsonElement root, out bool usedFallback)
+        => BuildLeafFolderName(root, DateTime.Now, out usedFallback);
+
+    public string BuildLeafFolderName(JsonElement root, DateTime now, out bool usedFallback)
     {
-        usedFallback = false;
-        var name = Sanitize(_paths.GetString(root, "name") ?? string.Empty);
-        var role = Sanitize(_paths.GetString(root, "role") ?? string.Empty);
-        var skills = GetTopSkills(root);
-
-        if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(role) && skills.Count == 0)
+        var directory = Sanitize(_paths.GetString(root, "directory") ?? string.Empty);
+        if (!string.IsNullOrWhiteSpace(directory))
         {
-            usedFallback = true;
-            return "Untitled-CV";
+            usedFallback = false;
+            return directory;
         }
 
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            usedFallback = true;
-            name = "Unknown";
-        }
-
-        if (string.IsNullOrWhiteSpace(role))
-        {
-            usedFallback = true;
-            role = "Role";
-        }
-
-        while (skills.Count < 3)
-        {
-            usedFallback = true;
-            skills.Add("Skill");
-        }
-
-        var skillPart = string.Join("-", skills.Take(3).Select(Sanitize));
-        return $"{name} - {role} - {skillPart}";
-    }
-
-    private List<string> GetTopSkills(JsonElement root)
-    {
-        var result = new List<string>();
-
-        if (_paths.TryGetElement(root, "topSkills", out var el))
-            AddSkills(el, result);
-        else if (_paths.TryGetElement(root, "metadata.topStacks", out el))
-            AddSkills(el, result);
-
-        return result;
-    }
-
-    private static void AddSkills(JsonElement el, List<string> result)
-    {
-        if (el.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in el.EnumerateArray())
-            {
-                var s = item.ValueKind == JsonValueKind.String ? item.GetString() : item.ToString();
-                if (!string.IsNullOrWhiteSpace(s))
-                    result.Add(s!);
-            }
-        }
-        else if (el.ValueKind == JsonValueKind.String)
-        {
-            foreach (var part in el.GetString()!.Split(new[] { ',', '|' }, StringSplitOptions.RemoveEmptyEntries))
-                result.Add(part.Trim());
-        }
+        usedFallback = true;
+        return now.ToString("yyyy-MM-dd_HH-mm-ss");
     }
 
     private static string Sanitize(string value)
@@ -134,7 +85,7 @@ public sealed class OutputFolderService
 
         var cleaned = Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
         cleaned = Regex.Replace(cleaned, @"-+", "-");
-        return cleaned;
+        return cleaned.Trim('.', ' ');
     }
 
     private static string MakeUniqueDirectory(string candidate, IssueCollector issues)

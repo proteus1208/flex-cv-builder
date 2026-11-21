@@ -85,17 +85,16 @@ public sealed class LiveJsonValidator
                 }
             }
 
-            foreach (var required in new[] { "name", "role", "topSkills" })
+            if (!_paths.TryGetElement(root, "directory", out var dirEl) || IsEmpty(dirEl))
             {
-                if (!_paths.TryGetElement(root, required, out var el) || IsEmpty(el))
+                if (marks.All(m => !m.Path.Equals("directory", StringComparison.OrdinalIgnoreCase)))
                 {
-                    if (marks.All(m => !m.Path.Equals(required, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        issues.Warning("MissingFolderField", "Folder",
-                            $"Recommended field '{required}' missing/empty for output folder naming.",
-                            required);
-                        marks.Add(new JsonMark(required, IssueSeverity.Warning, "missing"));
-                    }
+                    issues.Info(
+                        "MissingFolderField",
+                        "Folder",
+                        "No 'directory' field — output folder will use current date/time.",
+                        "directory");
+                    marks.Add(new JsonMark("directory", IssueSeverity.Info, "missing"));
                 }
             }
         }

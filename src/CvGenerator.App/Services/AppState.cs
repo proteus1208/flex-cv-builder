@@ -200,7 +200,7 @@ public sealed class AppState : IDisposable
         }
         catch
         {
-            OutputPreview = Path.Combine(OutputRoot, DateTime.Now.ToString("yyyy-MM-dd"), "(invalid JSON)");
+            OutputPreview = Path.Combine(OutputRoot, "(invalid JSON)");
         }
 
         // Prefer scoped ValidationPath from the scanner (same alias name can mean

@@ -472,6 +472,7 @@ public class DocxTemplateEngineTests
             {
                 JsonText = """
                 {
+                  "directory": "Acme-Backend-Role",
                   "name": "Cody Lee Berry",
                   "role": "Senior Engineer",
                   "topSkills": ["React", "Node.js", "C#"],
@@ -489,7 +490,7 @@ public class DocxTemplateEngineTests
             Assert.True(File.Exists(result.NotesPath));
             Assert.Equal("note body", File.ReadAllText(result.NotesPath!));
             Assert.Contains(result.Issues, i => i.Step == "Pdf" && i.Severity == Core.Models.IssueSeverity.Error);
-            Assert.Contains("Cody Lee Berry - Senior Engineer - React-Node.js-C#", result.OutputDirectory!);
+            Assert.Contains("Acme-Backend-Role", result.OutputDirectory!);
         }
         finally
         {

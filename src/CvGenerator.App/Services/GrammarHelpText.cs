@@ -134,19 +134,19 @@ Rules:
 
 5) Output folder fields
 -----------------------
-These JSON keys name the export folder:
+The export folder is named from:
 
-  name
-  role
-  topSkills   (array; first 3 used)
+  directory   (optional string)
 
 Folder shape:
-  {OutputRoot}/{yyyy-MM-dd}/{name} - {role} - {skill1}-{skill2}-{skill3}/
+  {OutputRoot}/{directory}/
+  or, if directory is missing/empty:
+  {OutputRoot}/{yyyy-MM-dd_HH-mm-ss}/
 
 Artifacts written there:
   resume.json
   resume.docx
-  resume.pdf   (needs LibreOffice)
+  resume.pdf   (Word Export preferred; LibreOffice fallback)
   notes.txt    (from JSON "notes")
 
 

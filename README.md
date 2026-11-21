@@ -7,10 +7,11 @@ Windows standalone app that merges **any-structure CV JSON** into a **DOCX templ
 - `resume.pdf` (via LibreOffice)
 - `notes.txt` (from JSON `notes`)
 
-Output folders:
+Output folders are named from the JSON `directory` field (or a date/time stamp if it is missing):
 
 ```text
-{OutputRoot}/{yyyy-MM-dd}/{name} - {role} - {skill1}-{skill2}-{skill3}/
+{OutputRoot}/{directory}/
+{OutputRoot}/{yyyy-MM-dd_HH-mm-ss}/   # when directory is absent
 ```
 
 The output root is remembered in `%AppData%/CvGenerator/settings.json`.

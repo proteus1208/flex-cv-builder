@@ -8,19 +8,30 @@ namespace CvGenerator.Core.Tests;
 public class OutputFolderAndNotesTests
 {
     [Fact]
-    public void Builds_folder_name_from_name_role_skills()
+    public void Builds_folder_name_from_directory_field()
     {
         using var doc = JsonDocument.Parse("""
         {
+          "directory": "Acme-Backend-Role",
           "name": "Cody Lee Berry",
-          "role": "Senior Engineer",
-          "topSkills": ["React", "Node.js", "C#"]
+          "role": "Senior Engineer"
         }
         """);
         var folders = new OutputFolderService();
         var leaf = folders.BuildLeafFolderName(doc.RootElement, out var fallback);
         Assert.False(fallback);
-        Assert.Equal("Cody Lee Berry - Senior Engineer - React-Node.js-C#", leaf);
+        Assert.Equal("Acme-Backend-Role", leaf);
+    }
+
+    [Fact]
+    public void Builds_folder_name_from_datetime_when_directory_missing()
+    {
+        using var doc = JsonDocument.Parse("""{"name":"Cody Lee Berry"}""");
+        var folders = new OutputFolderService();
+        var when = new DateTime(2026, 11, 21, 14, 30, 5);
+        var leaf = folders.BuildLeafFolderName(doc.RootElement, when, out var fallback);
+        Assert.True(fallback);
+        Assert.Equal("2026-11-21_14-30-05", leaf);
     }
 
     [Fact]
