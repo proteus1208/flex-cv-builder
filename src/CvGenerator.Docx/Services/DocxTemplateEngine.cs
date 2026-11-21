@@ -49,6 +49,13 @@ public sealed class DocxTemplateEngine
             // (that made thick filled bands with wrong gaps in output.docx / PDF).
             ThemeFontMaterializer.Materialize(doc);
 
+            // Title-page sections use a large top margin for the first-page header.
+            // After loops expand, that margin would pad every page of the section —
+            // move the extra space onto the first body paragraph instead.
+            TitlePageSectionNormalizer.Normalize(doc.MainDocumentPart.Document.Body);
+
+            BreakLongKeepNextChains(doc.MainDocumentPart.Document.Body);
+
             doc.MainDocumentPart.Document.Save();
         }
         catch (Exception ex)
@@ -333,13 +340,22 @@ public sealed class DocxTemplateEngine
                 childLoops.Push(new LoopFrame(propertyName, alias, item));
                 ProcessContainer(temp, part, root, childLoops, issues);
 
+                Paragraph? lastInsertedPara = null;
                 while (temp.ChildElements.Count > 0)
                 {
                     var child = temp.ChildElements[0];
                     child.Remove();
                     insertAfter.InsertAfterSelf(child);
                     insertAfter = child;
+                    if (child is Paragraph para)
+                        lastInsertedPara = para;
                 }
+
+                // Template headings/job rows often use w:keepNext. Cloning that across
+                // every array item glues the whole section into one unbreakable block,
+                // so Word pushes "Professional Experience" to the next page even when
+                // page 1 still has room. Drop keepNext on the last para of each item.
+                lastInsertedPara?.ParagraphProperties?.GetFirstChild<KeepNext>()?.Remove();
             }
 
             foreach (var el in block)
@@ -669,5 +685,30 @@ public sealed class DocxTemplateEngine
         var text = RunTextMerger.GetParagraphText(paragraph);
         if (text.Length > 0)
             RunTextMerger.ReplaceRange(paragraph, 0, text.Length, string.Empty);
+    }
+
+    /// <summary>
+    /// Safety net: long keepNext runs (common after array expansion) force Word to
+    /// jump whole blocks to the next page and leave empty space behind.
+    /// </summary>
+    private static void BreakLongKeepNextChains(OpenXmlElement container, int maxConsecutive = 3)
+    {
+        var run = 0;
+        foreach (var para in container.Descendants<Paragraph>())
+        {
+            var keepNext = para.ParagraphProperties?.GetFirstChild<KeepNext>();
+            if (keepNext is null)
+            {
+                run = 0;
+                continue;
+            }
+
+            run++;
+            if (run >= maxConsecutive)
+            {
+                keepNext.Remove();
+                run = 0;
+            }
+        }
     }
 }

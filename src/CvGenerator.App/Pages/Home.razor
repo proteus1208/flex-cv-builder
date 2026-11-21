@@ -87,13 +87,11 @@
             }
 
             <div class="json-editor-wrap">
-                <pre class="json-highlight" aria-hidden="true">@((MarkupString)State.JsonHighlightHtml)</pre>
                 <textarea class="json-editor"
                           @ref="_jsonEditor"
                           @bind="State.JsonText"
                           @bind:event="oninput"
                           @bind:after="OnJsonChanged"
-                          @onscroll="OnJsonScroll"
                           spellcheck="false"></textarea>
             </div>
         </section>
@@ -316,10 +314,10 @@
 
     private async Task OnJsonChanged()
     {
+        State.SchedulePersistJson();
         State.RefreshPreviewAndLiveValidation();
         StateHasChanged();
-        try { await JS.InvokeVoidAsync("cvSyncJsonScroll", _jsonEditor); }
-        catch { /* ignore */ }
+        await Task.CompletedTask;
     }
 
     private void OnTemplateChanged(ChangeEventArgs e)
@@ -330,12 +328,6 @@
     private async Task GenerateAll() => await State.GenerateAllAsync();
     private void OpenOutput() => State.OpenLastOutput();
     private void ClearIssues() => State.ClearIssues();
-
-    private async Task OnJsonScroll(EventArgs _)
-    {
-        try { await JS.InvokeVoidAsync("cvSyncJsonScroll", _jsonEditor); }
-        catch { /* ignore */ }
-    }
 
     private void OpenHelp()
     {

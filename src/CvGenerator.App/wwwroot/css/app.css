@@ -294,13 +294,12 @@ button, input, select, textarea {
   overflow: hidden;
 }
 
-.json-highlight,
 .json-editor {
-  position: absolute;
-  inset: 0;
+  display: block;
   margin: 0;
   width: 100%;
   height: 100%;
+  min-height: 220px;
   padding: 0.85rem 1rem;
   border: 0;
   border-radius: 12px;
@@ -312,38 +311,16 @@ button, input, select, textarea {
   overflow-wrap: break-word;
   tab-size: 2;
   box-sizing: border-box;
-}
-
-.json-highlight {
-  overflow: hidden;
-  pointer-events: none;
-  user-select: none;
-  -webkit-user-select: none;
-  color: var(--ink);
-  background: transparent;
-  z-index: 0;
-}
-
-.json-editor {
   overflow: auto;
   resize: none;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  caret-color: var(--ink);
+  color: var(--ink);
   background: transparent;
-  z-index: 1;
+  caret-color: var(--ink);
   box-shadow: none;
 }
 
 .json-editor::selection {
   background: rgba(14, 124, 102, 0.32);
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-}
-
-.json-editor::-moz-selection {
-  background: rgba(14, 124, 102, 0.32);
-  color: transparent;
 }
 
 .json-editor:focus {

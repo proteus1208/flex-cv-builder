@@ -25,6 +25,7 @@ public sealed class AppState : IDisposable
     private FileSystemWatcher? _templateWatcher;
     private readonly object _watchLock = new();
     private DateTime _lastWatchReload = DateTime.MinValue;
+    private CancellationTokenSource? _jsonPersistCts;
 
     public AppState(
         CvJsonService json,
@@ -72,6 +73,8 @@ public sealed class AppState : IDisposable
         TemplatesRoot = templatesRoot;
         settings.TemplatesRoot = templatesRoot;
         LibreOfficePath = settings.LibreOfficePath;
+        if (!string.IsNullOrWhiteSpace(settings.LastJson))
+            JsonText = settings.LastJson;
         RefreshLibreOfficeStatus();
         RefreshTemplates();
         RefreshPreviewAndLiveValidation();
@@ -81,7 +84,46 @@ public sealed class AppState : IDisposable
 
     public void Dispose()
     {
+        _jsonPersistCts?.Cancel();
+        PersistJsonNow();
         StopTemplateWatcher();
+    }
+
+    /// <summary>Debounced save of the JSON editor so the last content survives restart.</summary>
+    public void SchedulePersistJson()
+    {
+        _jsonPersistCts?.Cancel();
+        _jsonPersistCts = new CancellationTokenSource();
+        var token = _jsonPersistCts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(500, token);
+                PersistJsonNow();
+            }
+            catch (OperationCanceledException)
+            {
+                // newer edit scheduled
+            }
+        }, token);
+    }
+
+    public void PersistJsonNow()
+    {
+        if (_settingsStore is null || _settings is null)
+            return;
+        if (string.Equals(_settings.LastJson, JsonText, StringComparison.Ordinal))
+            return;
+        _settings.LastJson = JsonText;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch
+        {
+            // best-effort persistence
+        }
     }
 
     private void StartTemplateWatcher()
@@ -449,6 +491,7 @@ public sealed class AppState : IDisposable
         if (dlg.ShowDialog() != true)
             return;
         JsonText = File.ReadAllText(dlg.FileName);
+        PersistJsonNow();
         RefreshPreviewAndLiveValidation();
         Notify();
     }
@@ -472,6 +515,7 @@ public sealed class AppState : IDisposable
         try
         {
             JsonText = _json.Format(JsonText);
+            PersistJsonNow();
             RefreshPreviewAndLiveValidation();
             Notify();
         }
@@ -582,6 +626,7 @@ public sealed class AppState : IDisposable
                 Status = result.Status;
                 LastOutputDirectory = result.OutputDirectory;
             });
+            PersistJsonNow();
         }
         finally
         {
@@ -614,6 +659,7 @@ public sealed class AppState : IDisposable
             return null;
 
         JsonText = clipboard!.Trim();
+        PersistJsonNow();
         RefreshPreviewAndLiveValidation();
         Notify();
 

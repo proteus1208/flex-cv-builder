@@ -91,6 +91,62 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void Loop_expansion_breaks_keepNext_between_iterations()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart jobs}"))));
+            body.AppendChild(new Paragraph(
+                new ParagraphProperties(new KeepNext()),
+                new Run(new Text("Section"))));
+            body.AppendChild(new Paragraph(
+                new ParagraphProperties(new KeepNext()),
+                new Run(new Text("${jobs_i.name}"))));
+            body.AppendChild(new Paragraph(
+                new ParagraphProperties(new KeepNext()),
+                new Run(new Text("Remote"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd jobs}"))));
+            body.AppendChild(new Paragraph(
+                new ParagraphProperties(new KeepNext()),
+                new Run(new Text("After"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""{"jobs":[{"name":"A"},{"name":"B"},{"name":"C"}]}""");
+            var issues = new IssueCollector();
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, issues);
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var paras = result.MainDocumentPart!.Document.Body!.Elements<Paragraph>().ToList();
+            // Per item: Section(keepNext), name(keepNext), Remote(keepNext stripped)
+            // So: Section, A, Remote, Section, B, Remote, Section, C, Remote, After
+            Assert.Equal(10, paras.Count);
+
+            static bool HasKeepNext(Paragraph p)
+                => p.ParagraphProperties?.GetFirstChild<KeepNext>() != null;
+
+            Assert.True(HasKeepNext(paras[0]));  // Section
+            Assert.True(HasKeepNext(paras[1]));  // A
+            Assert.False(HasKeepNext(paras[2])); // Remote — chain broken between iterations
+            Assert.True(HasKeepNext(paras[3]));  // Section
+            Assert.True(HasKeepNext(paras[4]));  // B
+            Assert.False(HasKeepNext(paras[5])); // Remote
+            Assert.True(HasKeepNext(paras[6]));  // Section
+            Assert.True(HasKeepNext(paras[7]));  // C
+            Assert.False(HasKeepNext(paras[8])); // Remote
+            Assert.True(HasKeepNext(paras[9]));  // After (unchanged)
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
     public void Nested_ArrayStart_expands_inner_arrays()
     {
         var template = CreateTempDocx(doc =>

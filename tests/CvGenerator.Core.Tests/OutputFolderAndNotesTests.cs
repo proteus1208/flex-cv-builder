@@ -67,10 +67,16 @@ public class OutputFolderAndNotesTests
         try
         {
             var store = new SettingsStore(dir);
-            store.Save(new AppSettings { OutputRoot = @"D:\CV-Out", TemplatesRoot = @"D:\Templates" });
+            store.Save(new AppSettings
+            {
+                OutputRoot = @"D:\CV-Out",
+                TemplatesRoot = @"D:\Templates",
+                LastJson = """{"directory":"demo"}"""
+            });
             var loaded = store.Load("fallback-out", "fallback-tpl");
             Assert.Equal(@"D:\CV-Out", loaded.OutputRoot);
             Assert.Equal(@"D:\Templates", loaded.TemplatesRoot);
+            Assert.Equal("""{"directory":"demo"}""", loaded.LastJson);
         }
         finally
         {

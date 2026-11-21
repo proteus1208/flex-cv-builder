@@ -63,6 +63,7 @@ public partial class MainWindow : Window
         {
             _hotKey?.Dispose();
             _hotKey = null;
+            _state.Dispose();
         };
     }
 

@@ -14,15 +14,6 @@
     <div id="app">Loading…</div>
     <script src="_framework/blazor.webview.js"></script>
     <script>
-      window.cvSyncJsonScroll = function (el) {
-        if (!el) return;
-        var highlight = el.previousElementSibling;
-        if (highlight && highlight.classList.contains('json-highlight')) {
-          highlight.scrollTop = el.scrollTop;
-          highlight.scrollLeft = el.scrollLeft;
-        }
-      };
-
       window.cvJsonEditorTab = function (el, shift) {
         if (!el) return null;
         var indent = '  ';
@@ -82,11 +73,6 @@
           window.cvJsonEditorTab(el, e.shiftKey);
           el.dispatchEvent(new Event('input', { bubbles: true }));
         });
-        // Native scroll is more reliable than Blazor onscroll in WebView2.
-        el.addEventListener('scroll', function () {
-          window.cvSyncJsonScroll(el);
-        }, { passive: true });
-        window.cvSyncJsonScroll(el);
       };
     </script>
 </body>
