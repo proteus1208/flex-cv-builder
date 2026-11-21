@@ -304,6 +304,18 @@ public sealed class PdfConversionService
         {
             Directory.CreateDirectory(workDir);
             File.Copy(docxPath, tempDocx, overwrite: true);
+            // Temp copy only: turn thin pBdr into DrawingML rules so Word PDF keeps bars.
+            // Never mutate the user's resume.docx (that caused thick filled bands).
+            try
+            {
+                using (var tempDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(tempDocx, true))
+                    Internal.PdfBorderHardener.HardenForPdfExport(tempDoc);
+            }
+            catch (Exception ex)
+            {
+                attemptLog.AppendLine("border-harden skipped: " + ex.Message);
+            }
+
             TryDelete(pdfPath);
             WriteWordExportScript(scriptPath, tempDocx, tempPdf, statusPath);
             WriteWordExportPowerShell(psPath, tempDocx, tempPdf, statusPath);

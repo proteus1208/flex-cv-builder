@@ -13,7 +13,7 @@ namespace CvGenerator.Docx.Tests;
 public class PdfBorderHardenerTests
 {
     [Fact]
-    public void Generate_Converts_Paragraph_Bottom_Border_To_Shaded_Bar()
+    public void Generate_Preserves_Paragraph_Bottom_Border_In_OutputDocx()
     {
         var template = Path.Combine(Path.GetTempPath(), "cvgen-bar-" + Path.GetRandomFileName() + ".docx");
         var output = Path.Combine(Path.GetTempPath(), "cvgen-bar-out-" + Path.GetRandomFileName() + ".docx");
@@ -45,18 +45,16 @@ public class PdfBorderHardenerTests
             var body = outDoc.MainDocumentPart!.Document.Body!;
             var paragraphs = body.Elements<Paragraph>().ToList();
 
-            Assert.Equal(3, paragraphs.Count); // heading + shaded bar + body
-            Assert.DoesNotContain(
-                paragraphs[0].Descendants<BottomBorder>(),
-                b => b.Val?.Value == BorderValues.Single);
-
-            var bar = paragraphs[1];
-            Assert.Equal("CCD7E1", bar.ParagraphProperties?.Shading?.Fill?.Value);
-            Assert.Equal(LineSpacingRuleValues.Exact, bar.ParagraphProperties?.SpacingBetweenLines?.LineRule?.Value);
-            // sz=4 eighths-of-a-point → 0.5pt → 10 twips (must not inflate past authored width)
-            Assert.Equal("10", bar.ParagraphProperties?.SpacingBetweenLines?.Line?.Value);
-            Assert.Equal("60", bar.ParagraphProperties?.SpacingBetweenLines?.Before?.Value); // space=3pt → 60 twips
-            Assert.Equal("Body text", bar.NextSibling<Paragraph>()?.InnerText);
+            // Output DOCX must keep the real border — no shaded filler paragraph.
+            Assert.Equal(2, paragraphs.Count);
+            var bottom = paragraphs[0].ParagraphProperties?.ParagraphBorders?.BottomBorder;
+            Assert.NotNull(bottom);
+            Assert.Equal(BorderValues.Single, bottom!.Val?.Value);
+            Assert.Equal("CCD7E1", bottom.Color?.Value);
+            Assert.Equal(4U, bottom.Size?.Value);
+            Assert.Equal(3U, bottom.Space?.Value);
+            Assert.Null(paragraphs[1].ParagraphProperties?.Shading?.Fill?.Value);
+            Assert.Equal("Body text", paragraphs[1].InnerText);
         }
         finally
         {

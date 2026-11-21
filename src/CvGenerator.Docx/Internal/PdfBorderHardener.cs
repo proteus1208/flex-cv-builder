@@ -5,14 +5,17 @@ using DocumentFormat.OpenXml.Wordprocessing;
 namespace CvGenerator.Docx.Internal;
 
 /// <summary>
-/// Word 2016 ExportAsFixedFormat often drops thin <c>w:pBdr</c> bottom borders
-/// (section bars under PROFILE / EXPERIENCE, etc.) even though they appear in the DOCX.
-/// Convert those borders into short shaded paragraphs, which Word PDF keeps reliably.
-/// Bar thickness matches the original border <c>sz</c> (eighths of a point).
+/// PDF-export helper only. Never call during normal DOCX generation — output.docx
+/// must keep the template's <c>w:pBdr</c> bars unchanged.
+/// On a temp copy, rewrite bottom borders as a single-cell table bottom border
+/// (thin rule), which Word 2016 PDF export keeps more reliably than paragraph borders.
 /// </summary>
 internal static class PdfBorderHardener
 {
-    public static void Harden(WordprocessingDocument doc)
+    /// <summary>
+    /// Mutates <paramref name="doc"/> in place. Use only on a temp clone for PDF export.
+    /// </summary>
+    public static void HardenForPdfExport(WordprocessingDocument doc)
     {
         if (doc.MainDocumentPart?.Document?.Body != null)
             HardenContainer(doc.MainDocumentPart.Document.Body);
@@ -43,36 +46,67 @@ internal static class PdfBorderHardener
                 continue;
 
             var color = ResolveColor(bottom!);
-            var heightTwips = BorderHeightTwips(bottom!);
-            // w:space on borders is points of gap between text and the rule.
-            var gapTwips = BorderGapTwips(bottom!);
+            var size = bottom!.Size?.Value ?? 8;
+            var gapTwips = BorderGapTwips(bottom);
 
-            bottom!.Remove();
+            bottom.Remove();
             if (borders != null && !borders.ChildElements.Any())
                 borders.Remove();
 
-            var bar = new Paragraph(
-                new ParagraphProperties(
-                    new SpacingBetweenLines
-                    {
-                        Before = gapTwips.ToString(),
-                        After = "0",
-                        Line = heightTwips.ToString(),
-                        LineRule = LineSpacingRuleValues.Exact
-                    },
-                    new Shading
-                    {
-                        Val = ShadingPatternValues.Clear,
-                        Color = "auto",
-                        Fill = color
-                    },
-                    new KeepNext()
-                ),
-                new Run(
-                    new RunProperties(new FontSize { Val = "2" }),
-                    new Text("\u00A0") { Space = SpaceProcessingModeValues.Preserve }));
+            // Full-width 1-row table with ONLY a bottom border = thin horizontal rule.
+            var table = new Table(
+                new TableProperties(
+                    new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct },
+                    new TableBorders(
+                        new TopBorder { Val = BorderValues.Nil },
+                        new LeftBorder { Val = BorderValues.Nil },
+                        new BottomBorder
+                        {
+                            Val = BorderValues.Single,
+                            Size = size,
+                            Color = color,
+                            Space = 0
+                        },
+                        new RightBorder { Val = BorderValues.Nil },
+                        new InsideHorizontalBorder { Val = BorderValues.Nil },
+                        new InsideVerticalBorder { Val = BorderValues.Nil }),
+                    new TableCellMarginDefault(
+                        new TopMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
+                        new BottomMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
+                        new TableCellLeftMargin { Width = 0, Type = TableWidthValues.Dxa },
+                        new TableCellRightMargin { Width = 0, Type = TableWidthValues.Dxa })),
+                new TableRow(
+                    new TableRowProperties(
+                        new TableRowHeight
+                        {
+                            Val = (uint)Math.Max(20, gapTwips > 0 ? gapTwips : 20),
+                            HeightType = HeightRuleValues.Exact
+                        }),
+                    new TableCell(
+                        new TableCellProperties(
+                            new TableCellWidth { Type = TableWidthUnitValues.Pct, Width = "5000" },
+                            new TableCellBorders(
+                                new TopBorder { Val = BorderValues.Nil },
+                                new LeftBorder { Val = BorderValues.Nil },
+                                new BottomBorder
+                                {
+                                    Val = BorderValues.Single,
+                                    Size = size,
+                                    Color = color,
+                                    Space = 0
+                                },
+                                new RightBorder { Val = BorderValues.Nil })),
+                        new Paragraph(
+                            new ParagraphProperties(
+                                new SpacingBetweenLines
+                                {
+                                    Before = "0",
+                                    After = "0",
+                                    Line = "20",
+                                    LineRule = LineSpacingRuleValues.Exact
+                                })))));
 
-            para.InsertAfterSelf(bar);
+            para.InsertAfterSelf(table);
         }
     }
 
@@ -93,22 +127,8 @@ internal static class PdfBorderHardener
         return color.Trim().TrimStart('#').ToUpperInvariant();
     }
 
-    /// <summary>
-    /// OOXML border sz is eighths of a point. Twips = points × 20.
-    /// Preserve the authored width (e.g. sz=8 ≈ 1pt ≈ 1px at 96dpi).
-    /// </summary>
-    private static int BorderHeightTwips(BorderType border)
-    {
-        var eighths = (int)(border.Size?.Value ?? 8);
-        if (eighths < 1)
-            eighths = 1;
-        var twips = (int)Math.Round(eighths * 20.0 / 8.0, MidpointRounding.AwayFromZero);
-        return Math.Clamp(twips, 1, 120);
-    }
-
     private static int BorderGapTwips(BorderType border)
     {
-        // Border space is in points.
         var points = border.Space?.Value ?? 0;
         return Math.Clamp((int)Math.Round(points * 20.0, MidpointRounding.AwayFromZero), 0, 240);
     }
