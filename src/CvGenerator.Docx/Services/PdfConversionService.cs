@@ -187,8 +187,23 @@ public sealed class PdfConversionService
             return string.Empty;
         }
 
+        var loWork = Path.Combine(Path.GetTempPath(), "CvGenerator-lo-" + Guid.NewGuid().ToString("N"));
+        var loDocx = Path.Combine(loWork, "source.docx");
         try
         {
+            Directory.CreateDirectory(loWork);
+            File.Copy(docxPath, loDocx, overwrite: true);
+            try
+            {
+                using var tempDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(loDocx, true);
+                Internal.PdfBorderHardener.HardenForPdfExport(tempDoc);
+            }
+            catch
+            {
+                // convert original if harden fails
+                loDocx = docxPath;
+            }
+
             const string pdfFilter =
                 "pdf:writer_pdf_Export:" +
                 "{" +
@@ -220,7 +235,7 @@ public sealed class PdfConversionService
             psi.ArgumentList.Add(pdfFilter);
             psi.ArgumentList.Add("--outdir");
             psi.ArgumentList.Add(outputDirectory);
-            psi.ArgumentList.Add(docxPath);
+            psi.ArgumentList.Add(loDocx);
 
             using var process = Process.Start(psi);
             if (process is null)
@@ -245,7 +260,7 @@ public sealed class PdfConversionService
 
             var expected = Path.Combine(
                 outputDirectory,
-                Path.GetFileNameWithoutExtension(docxPath) + ".pdf");
+                Path.GetFileNameWithoutExtension(loDocx) + ".pdf");
 
             if (process.ExitCode != 0 || !File.Exists(expected))
             {
@@ -276,6 +291,18 @@ public sealed class PdfConversionService
             issues.Error("LibreOfficeFailed", "Pdf", $"PDF conversion error: {ex.Message}", detail: ex.ToString());
             return string.Empty;
         }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(loWork))
+                    Directory.Delete(loWork, recursive: true);
+            }
+            catch
+            {
+                // ignore temp cleanup
+            }
+        }
     }
 
     private static bool IsEnvTrue(string name)
@@ -303,9 +330,18 @@ public sealed class PdfConversionService
         try
         {
             Directory.CreateDirectory(workDir);
-            // Export the DOCX as-is (temp copy only to avoid locking resume.docx).
-            // Do not rewrite borders — that changed bar style/gaps vs the good DOCX.
+            // Temp copy only (never mutate resume.docx).
+            // Word 2016 PDF drops w:pBdr — replace with equivalent VML rules on the copy.
             File.Copy(docxPath, tempDocx, overwrite: true);
+            try
+            {
+                using var tempDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(tempDocx, true);
+                Internal.PdfBorderHardener.HardenForPdfExport(tempDoc);
+            }
+            catch (Exception ex)
+            {
+                attemptLog.AppendLine("border-harden-for-pdf skipped: " + ex.Message);
+            }
 
             TryDelete(pdfPath);
             WriteWordExportScript(scriptPath, tempDocx, tempPdf, statusPath);
