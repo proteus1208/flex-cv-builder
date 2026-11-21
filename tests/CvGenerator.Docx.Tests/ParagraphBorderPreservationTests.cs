@@ -10,7 +10,7 @@ using Xunit;
 
 namespace CvGenerator.Docx.Tests;
 
-public class PdfBorderHardenerTests
+public class ParagraphBorderPreservationTests
 {
     [Fact]
     public void Generate_Preserves_Paragraph_Bottom_Border_In_OutputDocx()

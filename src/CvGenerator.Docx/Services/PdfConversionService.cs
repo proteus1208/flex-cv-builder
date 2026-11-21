@@ -303,18 +303,9 @@ public sealed class PdfConversionService
         try
         {
             Directory.CreateDirectory(workDir);
+            // Export the DOCX as-is (temp copy only to avoid locking resume.docx).
+            // Do not rewrite borders — that changed bar style/gaps vs the good DOCX.
             File.Copy(docxPath, tempDocx, overwrite: true);
-            // Temp copy only: turn thin pBdr into DrawingML rules so Word PDF keeps bars.
-            // Never mutate the user's resume.docx (that caused thick filled bands).
-            try
-            {
-                using (var tempDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(tempDocx, true))
-                    Internal.PdfBorderHardener.HardenForPdfExport(tempDoc);
-            }
-            catch (Exception ex)
-            {
-                attemptLog.AppendLine("border-harden skipped: " + ex.Message);
-            }
 
             TryDelete(pdfPath);
             WriteWordExportScript(scriptPath, tempDocx, tempPdf, statusPath);
