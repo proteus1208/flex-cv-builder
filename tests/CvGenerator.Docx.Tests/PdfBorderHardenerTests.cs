@@ -56,6 +56,8 @@ public class PdfBorderHardenerTests
             Assert.Contains("1.125pt", xml, System.StringComparison.Ordinal);
             Assert.Equal("40", paras[1].ParagraphProperties?.SpacingBetweenLines?.Before?.Value); // space=2pt
             Assert.Equal("60", paras[1].ParagraphProperties?.SpacingBetweenLines?.After?.Value); // original after
+            // sz=9 → 1.125pt → 23 twips line box (min 20)
+            Assert.Equal("23", paras[1].ParagraphProperties?.SpacingBetweenLines?.Line?.Value);
             Assert.Equal("Body", paras[2].InnerText);
         }
         finally

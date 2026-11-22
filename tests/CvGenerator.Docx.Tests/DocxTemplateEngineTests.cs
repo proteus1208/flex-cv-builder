@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CvGenerator.Core.Models;
 using CvGenerator.Core.Services;
 using CvGenerator.Docx.Services;
 using DocumentFormat.OpenXml;
@@ -138,6 +139,48 @@ public class DocxTemplateEngineTests
             Assert.True(HasKeepNext(paras[7]));  // C
             Assert.False(HasKeepNext(paras[8])); // Remote
             Assert.True(HasKeepNext(paras[9]));  // After (unchanged)
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
+    public void Absolute_dotted_root_ArrayStart_expands_with_alias_and_join()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "Worked on ${ArrayStart experience.company_1.industries industry}${industry}${JoinStart}, ${JoinEnd}${ArrayEnd experience.company_1.industries}."))));
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "${ArrayStart experience.company_1.skills.primary topskill}${topskill}${JoinStart} | ${JoinEnd}${ArrayEnd experience.company_1.skills.primary}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "experience": {
+                "company_1": {
+                  "industries": ["Education", "E-commerce"],
+                  "skills": { "primary": ["C#", ".NET", "Azure"] }
+                }
+              }
+            }
+            """);
+            var issues = new IssueCollector();
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, issues);
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Worked on Education, E-commerce.", text);
+            Assert.Contains("C# | .NET | Azure", text);
+            Assert.DoesNotContain(issues.Issues, i => i.Severity == IssueSeverity.Error);
+            Assert.DoesNotContain("ArrayStart", text);
         }
         finally
         {

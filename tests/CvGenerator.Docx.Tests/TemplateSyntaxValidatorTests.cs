@@ -65,4 +65,23 @@ public class TemplateSyntaxValidatorTests
             """);
         Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
     }
+
+    [Fact]
+    public void Accepts_absolute_dotted_root_array_paths()
+    {
+        var issues = _sut.ValidateText("""
+            ${ArrayStart experience.company_1.industries industry}
+            ${industry}${JoinStart}, ${JoinEnd}
+            ${ArrayEnd experience.company_1.industries}
+            ${ArrayStart experience.company_1.skills.primary topskill}
+            ${topskill}${JoinStart} | ${JoinEnd}
+            ${ArrayEnd experience.company_1.skills.primary}
+            ${ArrayStart industries industry}
+            ${industry}${JoinStart} | ${JoinEnd}
+            ${ArrayEnd industries}
+            """);
+        Assert.DoesNotContain(issues, i => i.Code == "InvalidArrayStart");
+        Assert.DoesNotContain(issues, i => i.Code == "UnpairedArrayEnd");
+        Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
+    }
 }

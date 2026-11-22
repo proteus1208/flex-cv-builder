@@ -223,6 +223,7 @@ public sealed class LiveJsonValidator
         if (!TrySplitLoopPath(jsonPath, out var chain, out var field))
             return;
 
+        // chain[0] may be a dotted absolute path (experience.company_1.industries_i → chain[0]=experience.company_1.industries)
         if (!_paths.TryGetElement(root, chain[0], out var cursor) || cursor.ValueKind != JsonValueKind.Array)
         {
             issues.Warning("MissingLoopArray", "ResolvePaths",
@@ -236,7 +237,7 @@ public sealed class LiveJsonValidator
         if (items.Count == 0)
             return;
 
-        // Only deep-check first level thoroughly; nested chains sample first parent item.
+        // Scalar items (alias like ${industry} → path_i) or single-level object fields.
         if (chain.Count == 1)
         {
             for (var i = 0; i < items.Count; i++)

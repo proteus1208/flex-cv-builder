@@ -152,6 +152,10 @@ public static class AliasPathNormalizer
             return parentPrefix + "." + child + "_i";
         }
 
+        // Absolute root path: experience.company_1.industries → …industries_i
+        if (PlaceholderPatterns.TryParseRootArrayPath(source, out var arrayPath, out _))
+            return arrayPath + "_i";
+
         return null;
     }
 
@@ -169,6 +173,9 @@ public static class AliasPathNormalizer
         {
             return parentPrefix + "." + child;
         }
+
+        if (PlaceholderPatterns.TryParseRootArrayPath(source, out var arrayPath, out _))
+            return arrayPath;
 
         return null;
     }

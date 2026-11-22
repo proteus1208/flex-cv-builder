@@ -160,6 +160,7 @@ internal static partial class PlaceholderPatterns
 
     /// <summary>
     /// Alias-qualified nested source: skill.detail → parentAlias=skill, property=detail
+    /// (exactly one child segment after the alias).
     /// </summary>
     public static bool TryParseAliasQualifiedSource(
         string source,
@@ -183,6 +184,36 @@ internal static partial class PlaceholderPatterns
             return false;
         return true;
     }
+
+    /// <summary>
+    /// Absolute dotted JSON path from the document root (no <c>_i</c> segments), e.g.
+    /// <c>experience.company_1.skills.primary</c> or <c>industries</c>.
+    /// </summary>
+    public static bool TryParseRootArrayPath(string source, out string arrayPath, out string propertyName)
+    {
+        arrayPath = "";
+        propertyName = "";
+        var s = source.Trim();
+        if (string.IsNullOrEmpty(s) || s.Contains("_i", StringComparison.Ordinal))
+            return false;
+
+        var parts = s.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0 || parts.Any(p => !IsIdentifier(p)))
+            return false;
+
+        arrayPath = string.Join(".", parts);
+        propertyName = parts[^1];
+        return true;
+    }
+
+    /// <summary>
+    /// True when <paramref name="source"/> is a supported ArrayStart/ArrayEnd path:
+    /// plain name, <c>parent_i.child</c>, <c>alias.child</c>, or absolute dotted root path.
+    /// </summary>
+    public static bool IsValidArraySource(string source)
+        => TryParseQualifiedArrayName(source, out _, out _)
+           || TryParseAliasQualifiedSource(source, out _, out _)
+           || TryParseRootArrayPath(source, out _, out _);
 
     public static bool IsIdentifier(string value)
         => value.Length > 0

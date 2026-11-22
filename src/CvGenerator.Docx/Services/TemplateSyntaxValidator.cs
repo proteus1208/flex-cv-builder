@@ -62,13 +62,10 @@ public sealed partial class TemplateSyntaxValidator
             if (PlaceholderPatterns.IsArrayStart(token, out ArrayMarker startMarker))
             {
                 var name = startMarker.Source;
-                var validSource =
-                    PlaceholderPatterns.TryParseQualifiedArrayName(name, out _, out _) ||
-                    PlaceholderPatterns.TryParseAliasQualifiedSource(name, out _, out _);
-                if (!validSource)
+                if (!PlaceholderPatterns.IsValidArraySource(name))
                 {
                     issues.Error("InvalidArrayStart", "Template",
-                        $"Invalid ArrayStart source '{name}'. Use `skills`, `skills_i.detail`, or `skill.detail`.", token);
+                        $"Invalid ArrayStart source '{name}'. Use `skills`, `skills_i.detail`, `skill.detail`, or a dotted JSON path like `experience.company_1.skills.primary`.", token);
                 }
                 else if (startMarker.Alias != null &&
                          startMarker.Alias.Equals(name, StringComparison.OrdinalIgnoreCase) &&

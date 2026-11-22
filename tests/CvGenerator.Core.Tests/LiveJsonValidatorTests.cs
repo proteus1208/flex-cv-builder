@@ -6,6 +6,36 @@ namespace CvGenerator.Core.Tests;
 public class LiveJsonValidatorTests
 {
     [Fact]
+    public void Accepts_absolute_dotted_array_paths_and_alias_item_fields()
+    {
+        var sut = new LiveJsonValidator();
+        var result = sut.Validate(
+            """
+            {
+              "experience": {
+                "company_1": {
+                  "industries": ["Education", "FinTech"],
+                  "skills": { "primary": ["C#", ".NET"] }
+                }
+              },
+              "industries": ["Healthcare"]
+            }
+            """,
+            new (string Kind, string? JsonPath, string Token)[]
+            {
+                ("array-start", "experience.company_1.industries", "${ArrayStart experience.company_1.industries industry}"),
+                ("loop-field", "experience.company_1.industries_i", "${industry}"),
+                ("array-start", "experience.company_1.skills.primary", "${ArrayStart experience.company_1.skills.primary topskill}"),
+                ("loop-field", "experience.company_1.skills.primary_i", "${topskill}"),
+                ("array-start", "industries", "${ArrayStart industries industry}"),
+                ("loop-field", "industries_i", "${industry}")
+            },
+            Array.Empty<GenerationIssue>());
+
+        Assert.DoesNotContain(result.Issues, i => i.Code is "MissingLoopArray" or "MissingField" or "MissingLoopField");
+    }
+
+    [Fact]
     public void Warns_when_json_key_does_not_match_template()
     {
         var sut = new LiveJsonValidator();

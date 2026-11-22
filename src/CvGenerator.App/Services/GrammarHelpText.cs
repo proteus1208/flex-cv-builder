@@ -57,6 +57,8 @@ Notes:
   - ${ArrayStart varname iteratevarname} binds each item to iteratevarname.
   - Then use ${iteratevarname.field} instead of ${varname_i.field}.
   - ArrayEnd matches the array source (varname). Alias on End is optional.
+  - Absolute dotted paths from JSON root are allowed, e.g.
+    ${ArrayStart experience.company_1.skills.primary topskill}${topskill}...
   - Everything between the markers is repeated per item; styles are kept.
 
 

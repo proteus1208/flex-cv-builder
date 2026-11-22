@@ -43,13 +43,15 @@ internal static class PdfBorderHardener
 
     private static void HardenContainer(OpenXmlElement container, double widthPt)
     {
-        foreach (var para in container.Elements<Paragraph>().ToList())
+        // Descendants so borders inside tables/content controls are included.
+        foreach (var para in container.Descendants<Paragraph>().ToList())
         {
             var borders = para.ParagraphProperties?.ParagraphBorders;
             var bottom = borders?.BottomBorder;
             if (!IsVisibleBorder(bottom))
                 continue;
 
+            // Pure paragraph bottom border → VML rule with same color / sz / space.
             var color = ResolveColor(bottom!);
             var heightPt = BorderHeightPt(bottom!);
             var gapTwips = BorderGapTwips(bottom!);
@@ -68,13 +70,14 @@ internal static class PdfBorderHardener
             if (borders != null && !borders.ChildElements.Any())
                 borders.Remove();
 
+            var lineTwips = Math.Max(20, (int)Math.Round(heightPt * 20.0, MidpointRounding.AwayFromZero));
             var rule = new Paragraph(
                 new ParagraphProperties(
                     new SpacingBetweenLines
                     {
                         Before = gapTwips.ToString(),
                         After = afterBelowBar,
-                        Line = "20",
+                        Line = lineTwips.ToString(),
                         LineRule = LineSpacingRuleValues.Exact
                     }),
                 new Run(CreateVmlRule(color, widthPt, heightPt)));
@@ -86,6 +89,7 @@ internal static class PdfBorderHardener
     private static Picture CreateVmlRule(string colorHex, double widthPt, double heightPt)
     {
         // VML filled rect — Word 2016 PDF keeps these; paragraph borders it drops.
+        // Keep height == border sz (eighths-of-a-point → pt) and full content width.
         var rect = new V.Rectangle();
         rect.SetAttribute(new OpenXmlAttribute("id", null!, "SectionBar"));
         rect.SetAttribute(new OpenXmlAttribute(
