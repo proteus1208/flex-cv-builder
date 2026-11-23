@@ -155,36 +155,102 @@ public sealed class DocxTemplateEngine
                     marker.Source);
             }
 
-            // ${skill}${JoinStart}, ${JoinEnd} → join with ", " and no trailing separator
-            var itemTemplate = inner;
-            var separator = "";
-            if (PlaceholderPatterns.TryExtractJoin(inner, out var body, out var sep))
-            {
-                itemTemplate = body;
-                separator = sep;
-            }
+            // Keep styles from the INNER template (${alias}/fields), never from
+            // ArrayStart / ArrayEnd marker runs. Join separator keeps its own runs.
+            ResolveInlineBodyAndSeparatorRanges(
+                text,
+                innerStart,
+                endMatch.Index,
+                out var bodyStart,
+                out var bodyLength,
+                out var sepStart,
+                out var sepLength);
 
-            var parts = new List<string>();
-            foreach (var item in items)
+            var expandedRuns = new List<Run>();
+            for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
             {
                 var childLoops = CloneLoopStack(loops);
-                childLoops.Push(new LoopFrame(propertyName, marker.Alias, item));
+                childLoops.Push(new LoopFrame(propertyName, marker.Alias, items[itemIndex]));
 
-                var frag = new Paragraph(new Run(new Text(itemTemplate)
-                {
-                    Space = SpaceProcessingModeValues.Preserve
-                }));
+                var bodyRuns = RunTextMerger.CloneRunsForRange(paragraph, bodyStart, bodyLength);
+                var frag = new Paragraph();
+                foreach (var run in bodyRuns)
+                    frag.AppendChild(run);
+
                 ExpandInlineLoopsInParagraph(frag, part, root, childLoops, issues);
                 ReplacePlaceholdersInParagraph(frag, part, root, childLoops, issues);
-                parts.Add(RunTextMerger.GetParagraphText(frag));
+
+                foreach (var run in frag.Elements<Run>())
+                    expandedRuns.Add((Run)run.CloneNode(true));
+
+                if (itemIndex < items.Count - 1 && sepLength > 0)
+                {
+                    foreach (var sepRun in RunTextMerger.CloneRunsForRange(paragraph, sepStart, sepLength))
+                        expandedRuns.Add(sepRun);
+                }
             }
 
-            RunTextMerger.ReplaceRange(
-                paragraph,
-                replaceStart,
-                replaceLength,
-                string.Join(separator, parts));
+            // Strip ArrayStart…ArrayEnd (including their styles) and insert inner-styled runs.
+            RunTextMerger.ReplaceRangeWithRuns(paragraph, replaceStart, replaceLength, expandedRuns);
         }
+    }
+
+    /// <summary>
+    /// Split the inline loop inner span into the item body and optional Join separator,
+    /// as absolute character offsets in the paragraph text.
+    /// </summary>
+    private static void ResolveInlineBodyAndSeparatorRanges(
+        string fullText,
+        int innerStart,
+        int innerEnd,
+        out int bodyStart,
+        out int bodyLength,
+        out int sepStart,
+        out int sepLength)
+    {
+        bodyStart = innerStart;
+        bodyLength = Math.Max(0, innerEnd - innerStart);
+        sepStart = 0;
+        sepLength = 0;
+
+        var inner = fullText.Substring(innerStart, bodyLength);
+        if (!PlaceholderPatterns.TryExtractJoin(inner, out _, out _))
+            return;
+
+        var joinStart = PlaceholderPatterns.JoinStart().Match(fullText, innerStart);
+        if (!joinStart.Success || joinStart.Index >= innerEnd)
+            return;
+
+        var joinEnd = PlaceholderPatterns.JoinEnd().Match(fullText, joinStart.Index + joinStart.Length);
+        if (!joinEnd.Success || joinEnd.Index > innerEnd)
+            return;
+
+        // Body is everything in the inner span except JoinStart…JoinEnd (usually just ${item}).
+        // Prefer the contiguous prefix before JoinStart when the suffix after JoinEnd is empty.
+        var beforeLen = joinStart.Index - innerStart;
+        var afterStart = joinEnd.Index + joinEnd.Length;
+        var afterLen = Math.Max(0, innerEnd - afterStart);
+
+        if (afterLen == 0)
+        {
+            bodyStart = innerStart;
+            bodyLength = beforeLen;
+        }
+        else if (beforeLen == 0)
+        {
+            bodyStart = afterStart;
+            bodyLength = afterLen;
+        }
+        else
+        {
+            // Rare: content on both sides of Join — keep full inner minus join markers
+            // by using prefix only for styled body (matches typical ${item}${Join}… patterns).
+            bodyStart = innerStart;
+            bodyLength = beforeLen;
+        }
+
+        sepStart = joinStart.Index + joinStart.Length;
+        sepLength = Math.Max(0, joinEnd.Index - sepStart);
     }
 
     private static bool TryFindInlineLoop(

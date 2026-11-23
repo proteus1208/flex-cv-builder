@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -53,19 +54,40 @@ internal static class RunTextMerger
         if (length < 0)
             return;
 
+        // Prefer formatting from a normal ${...} echo placeholder inside the replaced
+        // span (not ArrayStart/ArrayEnd/Join markers). Falls back to first overlapping run.
+        var formatProps = ResolveEchoRunProperties(paragraph, start, length)
+                          ?? ResolveFirstOverlappingRunProperties(paragraph, start, length);
+
+        ReplaceRangeWithPlainText(paragraph, start, length, replacement, formatProps);
+    }
+
+    /// <summary>
+    /// Replace a character range with pre-built runs (styles already applied).
+    /// Used so inline loops keep inner ${...} formatting, not ArrayStart/ArrayEnd styles.
+    /// </summary>
+    public static void ReplaceRangeWithRuns(
+        Paragraph paragraph,
+        int start,
+        int length,
+        IReadOnlyList<Run> runs)
+    {
+        if (length < 0)
+            return;
+
         var segments = FlattenTextSegments(paragraph);
         if (segments.Count == 0)
         {
-            var run = new Run(new Text(replacement) { Space = SpaceProcessingModeValues.Preserve });
-            var pPr = paragraph.GetFirstChild<ParagraphProperties>();
-            if (pPr != null) pPr.InsertAfterSelf(run);
-            else paragraph.AppendChild(run);
+            foreach (var run in runs)
+                paragraph.AppendChild(run);
             return;
         }
 
         var end = start + length;
-        RunProperties? formatProps = null;
+        Run? anchorRun = null;
         Text? firstText = null;
+        string before = "";
+        string after = "";
 
         foreach (var seg in segments)
         {
@@ -73,7 +95,119 @@ internal static class RunTextMerger
             if (segEnd <= start || seg.Start >= end)
                 continue;
 
-            formatProps ??= CloneRunProperties(seg.Run);
+            anchorRun ??= seg.Run;
+            var overlapStart = Math.Max(start, seg.Start);
+            var overlapEnd = Math.Min(end, segEnd);
+            var localStart = overlapStart - seg.Start;
+            var localLen = overlapEnd - overlapStart;
+            var text = seg.Text.Text ?? "";
+
+            if (firstText is null)
+            {
+                firstText = seg.Text;
+                before = text[..localStart];
+                after = text[(localStart + localLen)..];
+                seg.Text.Text = before;
+                seg.Text.Space = SpaceProcessingModeValues.Preserve;
+            }
+            else
+            {
+                seg.Text.Text = text.Remove(localStart, localLen);
+                seg.Text.Space = SpaceProcessingModeValues.Preserve;
+            }
+        }
+
+        OpenXmlElement cursor = anchorRun
+                                ?? (OpenXmlElement?)paragraph.GetFirstChild<ParagraphProperties>()
+                                ?? paragraph;
+
+        if (anchorRun is null)
+        {
+            foreach (var run in runs)
+                paragraph.AppendChild(run);
+            if (!string.IsNullOrEmpty(after))
+                paragraph.AppendChild(new Run(new Text(after) { Space = SpaceProcessingModeValues.Preserve }));
+            return;
+        }
+
+        foreach (var run in runs)
+        {
+            cursor.InsertAfterSelf(run);
+            cursor = run;
+        }
+
+        if (!string.IsNullOrEmpty(after))
+        {
+            var afterRun = new Run(new Text(after) { Space = SpaceProcessingModeValues.Preserve });
+            if (anchorRun.RunProperties != null)
+                afterRun.RunProperties = (RunProperties)anchorRun.RunProperties.CloneNode(true);
+            cursor.InsertAfterSelf(afterRun);
+        }
+    }
+
+    /// <summary>
+    /// Clone the runs that cover <paramref name="start"/>..<paramref name="start"/>+length,
+    /// splitting edge runs so the clone contains only that character range.
+    /// </summary>
+    public static List<Run> CloneRunsForRange(Paragraph paragraph, int start, int length)
+    {
+        var result = new List<Run>();
+        if (length <= 0)
+            return result;
+
+        var end = start + length;
+        foreach (var seg in FlattenTextSegments(paragraph))
+        {
+            var segEnd = seg.Start + seg.Length;
+            if (segEnd <= start || seg.Start >= end)
+                continue;
+
+            var overlapStart = Math.Max(start, seg.Start);
+            var overlapEnd = Math.Min(end, segEnd);
+            var localStart = overlapStart - seg.Start;
+            var localLen = overlapEnd - overlapStart;
+            var text = (seg.Text.Text ?? "").Substring(localStart, localLen);
+            if (text.Length == 0)
+                continue;
+
+            var run = new Run();
+            if (seg.Run.RunProperties != null)
+                run.RunProperties = (RunProperties)seg.Run.RunProperties.CloneNode(true);
+            run.AppendChild(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
+            result.Add(run);
+        }
+
+        return result;
+    }
+
+    private static void ReplaceRangeWithPlainText(
+        Paragraph paragraph,
+        int start,
+        int length,
+        string replacement,
+        RunProperties? formatProps)
+    {
+        var segments = FlattenTextSegments(paragraph);
+        if (segments.Count == 0)
+        {
+            var run = new Run(new Text(replacement) { Space = SpaceProcessingModeValues.Preserve });
+            if (formatProps != null)
+                run.RunProperties = formatProps;
+            var pPr = paragraph.GetFirstChild<ParagraphProperties>();
+            if (pPr != null) pPr.InsertAfterSelf(run);
+            else paragraph.AppendChild(run);
+            return;
+        }
+
+        var end = start + length;
+        Text? firstText = null;
+        Run? firstRun = null;
+
+        foreach (var seg in segments)
+        {
+            var segEnd = seg.Start + seg.Length;
+            if (segEnd <= start || seg.Start >= end)
+                continue;
 
             var overlapStart = Math.Max(start, seg.Start);
             var overlapEnd = Math.Min(end, segEnd);
@@ -84,6 +218,7 @@ internal static class RunTextMerger
             if (firstText is null)
             {
                 firstText = seg.Text;
+                firstRun = seg.Run;
                 var before = text[..localStart];
                 var after = text[(localStart + localLen)..];
                 seg.Text.Text = before + replacement + after;
@@ -96,6 +231,10 @@ internal static class RunTextMerger
             }
         }
 
+        // Apply echo-placeholder formatting (not ArrayStart) onto the kept run.
+        if (firstRun != null && formatProps != null)
+            firstRun.RunProperties = (RunProperties)formatProps.CloneNode(true);
+
         if (firstText is null && !string.IsNullOrEmpty(replacement))
         {
             var run = new Run();
@@ -104,6 +243,48 @@ internal static class RunTextMerger
             run.AppendChild(new Text(replacement) { Space = SpaceProcessingModeValues.Preserve });
             paragraph.AppendChild(run);
         }
+    }
+
+    /// <summary>
+    /// Run properties of the first normal ${field} placeholder overlapping the range
+    /// (skips ArrayStart / ArrayEnd / JoinStart / JoinEnd).
+    /// </summary>
+    public static RunProperties? ResolveEchoRunProperties(Paragraph paragraph, int rangeStart, int rangeLength)
+    {
+        var text = GetParagraphText(paragraph);
+        var rangeEnd = rangeStart + rangeLength;
+        foreach (Match match in PlaceholderPatterns.AnyPlaceholder().Matches(text))
+        {
+            if (match.Index < rangeStart || match.Index + match.Length > rangeEnd)
+                continue;
+
+            var inner = match.Groups[1].Value.Trim();
+            if (inner.StartsWith("ArrayStart", StringComparison.OrdinalIgnoreCase) ||
+                inner.StartsWith("ArrayEnd", StringComparison.OrdinalIgnoreCase) ||
+                PlaceholderPatterns.IsJoinKeyword(inner))
+                continue;
+
+            return ResolveFirstOverlappingRunProperties(paragraph, match.Index, match.Length);
+        }
+
+        return null;
+    }
+
+    private static RunProperties? ResolveFirstOverlappingRunProperties(
+        Paragraph paragraph,
+        int start,
+        int length)
+    {
+        var end = start + length;
+        foreach (var seg in FlattenTextSegments(paragraph))
+        {
+            var segEnd = seg.Start + seg.Length;
+            if (segEnd <= start || seg.Start >= end)
+                continue;
+            return CloneRunProperties(seg.Run);
+        }
+
+        return null;
     }
 
     public static void ReplaceRangeWithRich(

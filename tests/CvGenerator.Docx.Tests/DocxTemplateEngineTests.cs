@@ -271,6 +271,50 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void Inline_loop_uses_inner_echo_style_not_ArrayStart_style()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            // Style (1) on ArrayStart/End markers — red.
+            // Style (2) on ${industry} echo — bold + blue. Output must use style (2).
+            body.AppendChild(new Paragraph(
+                new Run(
+                    new RunProperties(new Color { Val = "FF0000" }),
+                    new Text("${ArrayStart industries industry}")),
+                new Run(
+                    new RunProperties(new Bold(), new Color { Val = "0000FF" }),
+                    new Text("${industry}")),
+                new Run(
+                    new RunProperties(new Color { Val = "FF0000" }),
+                    new Text("${JoinStart}, ${JoinEnd}${ArrayEnd industries}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""{"industries":["Education","FinTech"]}""");
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, new IssueCollector());
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var para = result.MainDocumentPart!.Document.Body!.Elements<Paragraph>().First();
+            Assert.Equal("Education, FinTech", para.InnerText);
+            Assert.DoesNotContain("ArrayStart", para.InnerText);
+
+            var educationRun = para.Elements<Run>()
+                .First(r => (r.GetFirstChild<Text>()?.Text ?? "").Contains("Education"));
+            Assert.NotNull(educationRun.RunProperties?.Bold);
+            Assert.Equal("0000FF", educationRun.RunProperties?.Color?.Val?.Value);
+            Assert.NotEqual("FF0000", educationRun.RunProperties?.Color?.Val?.Value);
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
     public void Inline_nested_skill_detail_with_reused_alias()
     {
         var template = CreateTempDocx(doc =>
