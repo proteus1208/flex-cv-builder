@@ -313,14 +313,19 @@ button, input, select, textarea {
   box-sizing: border-box;
   overflow: auto;
   resize: none;
-  color: var(--ink);
-  background: transparent;
-  caret-color: var(--ink);
+  /* Force readable text in WebView2 (OS dark mode can paint white glyphs on white). */
+  color-scheme: light;
+  color: #14212b !important;
+  -webkit-text-fill-color: #14212b !important;
+  caret-color: #14212b;
+  background: #ffffff !important;
   box-shadow: none;
 }
 
 .json-editor::selection {
   background: rgba(14, 124, 102, 0.32);
+  color: #14212b;
+  -webkit-text-fill-color: #14212b;
 }
 
 .json-editor:focus {
