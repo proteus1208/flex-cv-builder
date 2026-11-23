@@ -136,15 +136,15 @@ internal static partial class PlaceholderPatterns
         if (string.IsNullOrEmpty(s))
             return false;
 
-        // Plain identifier (no dots, no _i)
-        if (!s.Contains('.', StringComparison.Ordinal) && !s.Contains("_i", StringComparison.Ordinal))
+        // Plain identifier (any root array name, e.g. extra_infos — not a false "_i" hit).
+        if (!s.Contains('.', StringComparison.Ordinal) && !HasLoopMarker(s))
         {
             propertyName = s;
             return true;
         }
 
-        // Classic parent qualification requires _i.
-        if (!s.Contains("_i.", StringComparison.Ordinal))
+        // Classic parent qualification requires a real loop marker segment (foo_i.bar).
+        if (!HasLoopMarker(s) || !s.Contains('.', StringComparison.Ordinal))
             return false;
 
         if (!TryParseLoopReference(s, out var reference) || string.IsNullOrEmpty(reference.FieldPath))
@@ -159,42 +159,47 @@ internal static partial class PlaceholderPatterns
     }
 
     /// <summary>
-    /// Alias-qualified nested source: skill.detail → parentAlias=skill, property=detail
-    /// (exactly one child segment after the alias).
+    /// Alias-qualified nested source under an active iterate alias:
+    ///   skill.detail              → alias=skill, relative=detail
+    ///   exp.skills.primary        → alias=exp, relative=skills.primary
     /// </summary>
     public static bool TryParseAliasQualifiedSource(
         string source,
         out string parentAlias,
-        out string propertyName)
+        out string relativePath)
     {
         parentAlias = "";
-        propertyName = "";
+        relativePath = "";
         var s = source.Trim();
         var dot = s.IndexOf('.');
         if (dot <= 0 || dot >= s.Length - 1)
             return false;
-        if (s.Contains("_i", StringComparison.Ordinal))
+        if (HasLoopMarker(s))
             return false;
 
         parentAlias = s[..dot];
-        propertyName = s[(dot + 1)..];
-        if (propertyName.Contains('.'))
+        relativePath = s[(dot + 1)..];
+        if (!IsIdentifier(parentAlias))
             return false;
-        if (!IsIdentifier(parentAlias) || !IsIdentifier(propertyName))
+
+        var parts = relativePath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0 || parts.Any(p => !IsIdentifier(p)))
             return false;
+
+        relativePath = string.Join(".", parts);
         return true;
     }
 
     /// <summary>
-    /// Absolute dotted JSON path from the document root (no <c>_i</c> segments), e.g.
-    /// <c>experience.company_1.skills.primary</c> or <c>industries</c>.
+    /// Absolute dotted JSON path from the document root (no loop <c>_i</c> markers), e.g.
+    /// <c>experience.company_1.skills.primary</c>, <c>industries</c>, or <c>extra_infos</c>.
     /// </summary>
     public static bool TryParseRootArrayPath(string source, out string arrayPath, out string propertyName)
     {
         arrayPath = "";
         propertyName = "";
         var s = source.Trim();
-        if (string.IsNullOrEmpty(s) || s.Contains("_i", StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(s) || HasLoopMarker(s))
             return false;
 
         var parts = s.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -208,7 +213,7 @@ internal static partial class PlaceholderPatterns
 
     /// <summary>
     /// True when <paramref name="source"/> is a supported ArrayStart/ArrayEnd path:
-    /// plain name, <c>parent_i.child</c>, <c>alias.child</c>, or absolute dotted root path.
+    /// any root array name, <c>parent_i.child</c>, <c>alias.child[.nested]</c>, or absolute dotted root path.
     /// </summary>
     public static bool IsValidArraySource(string source)
         => TryParseQualifiedArrayName(source, out _, out _)
@@ -219,6 +224,33 @@ internal static partial class PlaceholderPatterns
         => value.Length > 0
            && (char.IsLetter(value[0]) || value[0] == '_')
            && value.All(c => char.IsLetterOrDigit(c) || c == '_');
+
+    /// <summary>
+    /// True when <paramref name="source"/> contains a real loop marker segment
+    /// (<c>foo_i</c> or <c>foo_i.bar</c>), not a coincidental substring like <c>extra_infos</c>.
+    /// </summary>
+    public static bool HasLoopMarker(string source)
+    {
+        var s = source.AsSpan();
+        for (var i = 0; i < s.Length - 1; i++)
+        {
+            if (s[i] != '_' || s[i + 1] != 'i')
+                continue;
+
+            var after = i + 2;
+            if (after < s.Length && s[after] != '.')
+                continue; // e.g. "_in" inside extra_infos
+
+            // Require an identifier character before "_i"
+            if (i == 0)
+                continue;
+            var prev = s[i - 1];
+            if (char.IsLetterOrDigit(prev) || prev == '_')
+                return true;
+        }
+
+        return false;
+    }
 
     public static bool IsJoinStart(string text) => JoinStart().IsMatch(text);
     public static bool IsJoinEnd(string text) => JoinEnd().IsMatch(text);

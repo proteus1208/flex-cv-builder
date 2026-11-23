@@ -146,13 +146,14 @@ public static class AliasPathNormalizer
             return string.Join(".", parents.Select(p => p + "_i")) + "." + prop + "_i";
         }
 
-        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var child) &&
+        // exp.skills.primary → experiences_i.skills.primary_i
+        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var relative) &&
             aliasMap.TryGetValue(parentAlias, out var parentPrefix))
         {
-            return parentPrefix + "." + child + "_i";
+            return parentPrefix + "." + relative + "_i";
         }
 
-        // Absolute root path: experience.company_1.industries → …industries_i
+        // Absolute root path: extra_infos / experience.company_1.industries → …_i
         if (PlaceholderPatterns.TryParseRootArrayPath(source, out var arrayPath, out _))
             return arrayPath + "_i";
 
@@ -168,10 +169,10 @@ public static class AliasPathNormalizer
             return string.Join(".", parents.Select(p => p + "_i")) + "." + prop;
         }
 
-        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var child) &&
+        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var relative) &&
             aliasMap.TryGetValue(parentAlias, out var parentPrefix))
         {
-            return parentPrefix + "." + child;
+            return parentPrefix + "." + relative;
         }
 
         if (PlaceholderPatterns.TryParseRootArrayPath(source, out var arrayPath, out _))

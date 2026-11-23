@@ -458,17 +458,20 @@ public sealed class DocxTemplateEngine
             return true;
         }
 
-        // Alias parent: skill.detail (and only when that alias is in scope)
-        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out propertyName))
+        // Alias parent: exp.skills.primary / skill.detail (when that alias is in scope)
+        if (PlaceholderPatterns.TryParseAliasQualifiedSource(source, out var parentAlias, out var relativePath))
         {
             if (TryFindAliasFrame(loops, parentAlias, out var owner))
             {
-                items = _paths.GetArrayItems(owner, propertyName, out coerced, out missing);
+                propertyName = relativePath.Contains('.')
+                    ? relativePath[(relativePath.LastIndexOf('.') + 1)..]
+                    : relativePath;
+                items = _paths.GetArrayItems(owner, relativePath, out coerced, out missing);
                 return true;
             }
         }
 
-        // Absolute dotted path from root: experience.company_1.skills.primary
+        // Absolute path from root: extra_infos, experience.company_1.skills.primary, …
         if (PlaceholderPatterns.TryParseRootArrayPath(source, out var arrayPath, out propertyName))
         {
             items = _paths.GetArrayItems(root, arrayPath, out coerced, out missing);

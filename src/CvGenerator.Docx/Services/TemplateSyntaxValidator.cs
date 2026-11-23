@@ -65,7 +65,7 @@ public sealed partial class TemplateSyntaxValidator
                 if (!PlaceholderPatterns.IsValidArraySource(name))
                 {
                     issues.Error("InvalidArrayStart", "Template",
-                        $"Invalid ArrayStart source '{name}'. Use `skills`, `skills_i.detail`, `skill.detail`, or a dotted JSON path like `experience.company_1.skills.primary`.", token);
+                        $"Invalid ArrayStart source '{name}'. Use any root array (`extra_infos`), nested `parent_i.child`, alias path (`exp.skills.primary`), or a dotted JSON path.", token);
                 }
                 else if (startMarker.Alias != null &&
                          startMarker.Alias.Equals(name, StringComparison.OrdinalIgnoreCase) &&

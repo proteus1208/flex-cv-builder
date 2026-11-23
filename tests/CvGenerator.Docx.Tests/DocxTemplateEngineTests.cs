@@ -148,6 +148,88 @@ public class DocxTemplateEngineTests
     }
 
     [Fact]
+    public void Root_array_extra_infos_expands_despite_underscore_i_substring()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "${ArrayStart extra_infos info}${info}${JoinStart} | ${JoinEnd}${ArrayEnd extra_infos}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "extra_infos": [
+                "codyleeberry1999@gmail.com",
+                "+1 (765) 694-4921",
+                "Indianapolis, Indiana, United States"
+              ]
+            }
+            """);
+            var issues = new IssueCollector();
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, issues);
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("codyleeberry1999@gmail.com | +1 (765) 694-4921 | Indianapolis, Indiana, United States", text);
+            Assert.DoesNotContain(issues.Issues, i => i.Code is "InvalidArrayStart" or "MissingLoopArray");
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
+    public void Nested_alias_path_exp_skills_primary_expands()
+    {
+        var template = CreateTempDocx(doc =>
+        {
+            var body = doc.MainDocumentPart!.Document.Body!;
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayStart experiences exp}"))));
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "${ArrayStart exp.skills.primary topskill}${topskill}${JoinStart} | ${JoinEnd}${ArrayEnd exp.skills.primary}"))));
+            body.AppendChild(new Paragraph(new Run(new Text(
+                "${ArrayStart exp.skills.secondary topskill}${topskill}${JoinStart} | ${JoinEnd}${ArrayEnd exp.skills.secondary}"))));
+            body.AppendChild(new Paragraph(new Run(new Text("${ArrayEnd experiences}"))));
+        });
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "experiences": [
+                {
+                  "skills": {
+                    "primary": ["Python", "FastAPI", "React"],
+                    "secondary": ["PyTorch", "YOLO", "OpenCV"]
+                  }
+                }
+              ]
+            }
+            """);
+            var issues = new IssueCollector();
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, issues);
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var text = result.MainDocumentPart!.Document.Body!.InnerText;
+            Assert.Contains("Python | FastAPI | React", text);
+            Assert.Contains("PyTorch | YOLO | OpenCV", text);
+            Assert.DoesNotContain(issues.Issues, i => i.Code == "MissingLoopArray");
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
     public void Absolute_dotted_root_ArrayStart_expands_with_alias_and_join()
     {
         var template = CreateTempDocx(doc =>

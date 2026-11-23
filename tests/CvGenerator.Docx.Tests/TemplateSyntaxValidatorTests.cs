@@ -84,4 +84,34 @@ public class TemplateSyntaxValidatorTests
         Assert.DoesNotContain(issues, i => i.Code == "UnpairedArrayEnd");
         Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
     }
+
+    [Fact]
+    public void Accepts_root_array_names_containing_underscore_i_substring()
+    {
+        // Regression: "extra_infos" contains "_i" as substring but is not a loop marker.
+        var issues = _sut.ValidateText("""
+            ${ArrayStart extra_infos info}
+            ${info}${JoinStart} | ${JoinEnd}
+            ${ArrayEnd extra_infos}
+            """);
+        Assert.DoesNotContain(issues, i => i.Code == "InvalidArrayStart");
+        Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
+    }
+
+    [Fact]
+    public void Accepts_multi_segment_alias_nested_arrays()
+    {
+        var issues = _sut.ValidateText("""
+            ${ArrayStart experiences exp}
+            ${ArrayStart exp.skills.primary topskill}
+            ${topskill}${JoinStart} | ${JoinEnd}
+            ${ArrayEnd exp.skills.primary}
+            ${ArrayStart exp.skills.secondary topskill}
+            ${topskill}${JoinStart} | ${JoinEnd}
+            ${ArrayEnd exp.skills.secondary}
+            ${ArrayEnd experiences}
+            """);
+        Assert.DoesNotContain(issues, i => i.Code == "InvalidArrayStart");
+        Assert.DoesNotContain(issues, i => i.Severity == IssueSeverity.Error);
+    }
 }
