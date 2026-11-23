@@ -10,7 +10,7 @@ namespace CvGenerator.Docx.Tests;
 public class HeaderFooterTests
 {
     [Fact]
-    public void Title_page_keeps_header_top_margin_and_splits_overflow_to_continuation()
+    public void Title_page_overflow_does_not_inject_mid_body_next_page_section_break()
     {
         var path = Path.Combine(Path.GetTempPath(), "cvgen-title-" + Guid.NewGuid().ToString("N") + ".docx");
         using (var doc = WordprocessingDocument.Create(path, WordprocessingDocumentType.Document))
@@ -23,7 +23,7 @@ public class HeaderFooterTests
 
             // Section 1 (title page): large top margin + first header only.
             // Section 2: normal top margin + default header.
-            // Many array items force the title section past one page.
+            // Many array items overflow page 1 — engine must NOT inject an extra Next Page break.
             main.Document = new Document(new Body(
                 new Paragraph(new Run(new Text("${ArrayStart items}"))),
                 new Paragraph(new Run(new Text("- ${items_i}"))),
@@ -71,32 +71,30 @@ public class HeaderFooterTests
 
             using var result = WordprocessingDocument.Open(output, false);
             var body = result.MainDocumentPart!.Document.Body!;
-            var sectionBreaks = body.Elements<Paragraph>()
+            var paragraphSectPrs = body.Elements<Paragraph>()
                 .Select(p => p.ParagraphProperties?.GetFirstChild<SectionProperties>())
                 .Where(s => s != null)
                 .Cast<SectionProperties>()
                 .ToList();
 
-            Assert.True(sectionBreaks.Count >= 2, "overflow should insert a continuation section break");
-
-            // First section break must still be the title page (header padding via pgMar.top).
-            var titleSect = sectionBreaks.First(s => s.GetFirstChild<TitlePage>() != null);
+            // Only the template's own section break (on Education) — no injected mid-loop break.
+            Assert.Single(paragraphSectPrs);
+            var titleSect = paragraphSectPrs[0];
+            Assert.NotNull(titleSect.GetFirstChild<TitlePage>());
             Assert.Equal(2419, titleSect.GetFirstChild<PageMargin>()!.Top!.Value);
-            Assert.Equal(
-                SectionMarkValues.NextPage,
-                titleSect.GetFirstChild<SectionType>()?.Val?.Value);
+
+            // No Next Page break attached to expanded item paragraphs.
+            var itemParas = body.Elements<Paragraph>()
+                .Where(p => p.InnerText.StartsWith("- a", StringComparison.Ordinal))
+                .ToList();
+            Assert.True(itemParas.Count >= 10);
+            Assert.All(itemParas, p =>
+                Assert.Null(p.ParagraphProperties?.GetFirstChild<SectionProperties>()));
 
             // First body paragraph must NOT receive content spacing.before hacks.
             var first = body.Elements<Paragraph>().First();
             var before = first.ParagraphProperties?.GetFirstChild<SpacingBetweenLines>()?.Before?.Value;
             Assert.True(string.IsNullOrEmpty(before) || before == "0" || int.Parse(before!) < 500);
-
-            // Later section(s) use continuation top margin (no titlePg).
-            var continuation = sectionBreaks.First(s => s.GetFirstChild<TitlePage>() is null);
-            Assert.Equal(792, continuation.GetFirstChild<PageMargin>()!.Top!.Value);
-            Assert.Contains(
-                continuation.Elements<HeaderReference>(),
-                h => h.Type?.Value == HeaderFooterValues.Default && h.Id == "rIdDefault");
         }
         finally
         {
