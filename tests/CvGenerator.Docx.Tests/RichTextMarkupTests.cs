@@ -28,6 +28,58 @@ public class RichTextMarkupTests
     }
 
     [Fact]
+    public void Inline_array_preserves_markdown_link_labels()
+    {
+        var template = Path.Combine(Path.GetTempPath(), "cvgen-rich-arr-" + Guid.NewGuid().ToString("N") + ".docx");
+        using (var doc = WordprocessingDocument.Create(template, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text(
+                    "${ArrayStart extra_infos info}${info}${JoinStart} | ${JoinEnd}${ArrayEnd extra_infos}")))));
+            main.Document.Save();
+        }
+
+        var output = Path.ChangeExtension(template, ".out.docx");
+        try
+        {
+            using var json = JsonDocument.Parse("""
+            {
+              "extra_infos": [
+                "codyleeberry1999@gmail.com",
+                "[LinkedIn](https://www.linkedin.com/in/cody-lee-berry-603179449/)",
+                "[GitHub](https://github.com/proteus1208)",
+                "[Portfolio](https://cody-lee-berry.vercel.app/)"
+              ]
+            }
+            """);
+            new DocxTemplateEngine().Generate(template, output, json.RootElement, new IssueCollector());
+
+            using var result = WordprocessingDocument.Open(output, false);
+            var body = result.MainDocumentPart!.Document.Body!;
+            var text = body.InnerText;
+            Assert.Contains("LinkedIn", text);
+            Assert.Contains("GitHub", text);
+            Assert.Contains("Portfolio", text);
+            Assert.DoesNotContain("[LinkedIn]", text);
+            Assert.DoesNotContain("https://github.com", text);
+
+            var labels = body.Descendants<Hyperlink>()
+                .Select(h => h.InnerText)
+                .ToList();
+            Assert.Contains("LinkedIn", labels);
+            Assert.Contains("GitHub", labels);
+            Assert.Contains("Portfolio", labels);
+            Assert.Equal(3, body.Descendants<Hyperlink>().Count(h => h.Id != null));
+        }
+        finally
+        {
+            File.Delete(template);
+            if (File.Exists(output)) File.Delete(output);
+        }
+    }
+
+    [Fact]
     public void Docx_renders_rich_markup_from_json()
     {
         var template = Path.Combine(Path.GetTempPath(), "cvgen-rich-" + Guid.NewGuid().ToString("N") + ".docx");

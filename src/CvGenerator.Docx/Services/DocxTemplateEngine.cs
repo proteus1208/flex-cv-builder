@@ -166,7 +166,8 @@ public sealed class DocxTemplateEngine
                 out var sepStart,
                 out var sepLength);
 
-            var expandedRuns = new List<Run>();
+            // Runs and Hyperlinks — rich [label](url) in array items must keep Hyperlink wrappers.
+            var expandedNodes = new List<OpenXmlElement>();
             for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
             {
                 var childLoops = CloneLoopStack(loops);
@@ -180,18 +181,22 @@ public sealed class DocxTemplateEngine
                 ExpandInlineLoopsInParagraph(frag, part, root, childLoops, issues);
                 ReplacePlaceholdersInParagraph(frag, part, root, childLoops, issues);
 
-                foreach (var run in frag.Elements<Run>())
-                    expandedRuns.Add((Run)run.CloneNode(true));
+                foreach (var child in frag.ChildElements)
+                {
+                    if (child is ParagraphProperties)
+                        continue;
+                    expandedNodes.Add(child.CloneNode(true));
+                }
 
                 if (itemIndex < items.Count - 1 && sepLength > 0)
                 {
                     foreach (var sepRun in RunTextMerger.CloneRunsForRange(paragraph, sepStart, sepLength))
-                        expandedRuns.Add(sepRun);
+                        expandedNodes.Add(sepRun);
                 }
             }
 
-            // Strip ArrayStart…ArrayEnd (including their styles) and insert inner-styled runs.
-            RunTextMerger.ReplaceRangeWithRuns(paragraph, replaceStart, replaceLength, expandedRuns);
+            // Strip ArrayStart…ArrayEnd (including their styles) and insert inner-styled nodes.
+            RunTextMerger.ReplaceRangeWithElements(paragraph, replaceStart, replaceLength, expandedNodes);
         }
     }
 

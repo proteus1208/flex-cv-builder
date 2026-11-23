@@ -71,6 +71,17 @@ internal static class RunTextMerger
         int start,
         int length,
         IReadOnlyList<Run> runs)
+        => ReplaceRangeWithElements(paragraph, start, length, runs);
+
+    /// <summary>
+    /// Replace a character range with pre-built paragraph children (Runs and/or Hyperlinks).
+    /// Hyperlinks are required so inline arrays keep [label](url) markup from JSON values.
+    /// </summary>
+    public static void ReplaceRangeWithElements(
+        Paragraph paragraph,
+        int start,
+        int length,
+        IReadOnlyList<OpenXmlElement> nodes)
     {
         if (length < 0)
             return;
@@ -78,8 +89,8 @@ internal static class RunTextMerger
         var segments = FlattenTextSegments(paragraph);
         if (segments.Count == 0)
         {
-            foreach (var run in runs)
-                paragraph.AppendChild(run);
+            foreach (var node in nodes)
+                paragraph.AppendChild(node);
             return;
         }
 
@@ -117,23 +128,20 @@ internal static class RunTextMerger
             }
         }
 
-        OpenXmlElement cursor = anchorRun
-                                ?? (OpenXmlElement?)paragraph.GetFirstChild<ParagraphProperties>()
-                                ?? paragraph;
-
         if (anchorRun is null)
         {
-            foreach (var run in runs)
-                paragraph.AppendChild(run);
+            foreach (var node in nodes)
+                paragraph.AppendChild(node);
             if (!string.IsNullOrEmpty(after))
                 paragraph.AppendChild(new Run(new Text(after) { Space = SpaceProcessingModeValues.Preserve }));
             return;
         }
 
-        foreach (var run in runs)
+        OpenXmlElement cursor = anchorRun;
+        foreach (var node in nodes)
         {
-            cursor.InsertAfterSelf(run);
-            cursor = run;
+            cursor.InsertAfterSelf(node);
+            cursor = node;
         }
 
         if (!string.IsNullOrEmpty(after))
