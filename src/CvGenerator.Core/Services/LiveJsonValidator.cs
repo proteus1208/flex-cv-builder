@@ -92,7 +92,7 @@ public sealed class LiveJsonValidator
                     issues.Info(
                         "MissingFolderField",
                         "Folder",
-                        "No 'directory' field — output folder will use current date/time.",
+                        "No 'directory' field — output folder will use Tokyo date + time stamp only.",
                         "directory");
                     marks.Add(new JsonMark("directory", IssueSeverity.Info, "missing"));
                 }

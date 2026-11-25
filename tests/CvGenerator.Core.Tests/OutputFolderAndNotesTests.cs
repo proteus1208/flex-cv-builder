@@ -8,7 +8,7 @@ namespace CvGenerator.Core.Tests;
 public class OutputFolderAndNotesTests
 {
     [Fact]
-    public void Builds_folder_name_from_directory_field()
+    public void Builds_path_from_tokyo_date_stamp_and_directory()
     {
         using var doc = JsonDocument.Parse("""
         {
@@ -18,20 +18,33 @@ public class OutputFolderAndNotesTests
         }
         """);
         var folders = new OutputFolderService();
-        var leaf = folders.BuildLeafFolderName(doc.RootElement, out var fallback);
+        // Unspecified DateTime = Tokyo wall clock.
+        var when = new DateTime(2026, 11, 21, 14, 30, 5);
+        var relative = folders.BuildRelativeOutputPath(doc.RootElement, new DateTimeOffset(when, TimeSpan.FromHours(9)), out var fallback);
         Assert.False(fallback);
-        Assert.Equal("Acme-Backend-Role", leaf);
+        Assert.Equal(Path.Combine("2026-11-21", "14-30-05_Acme-Backend-Role"), relative);
     }
 
     [Fact]
-    public void Builds_folder_name_from_datetime_when_directory_missing()
+    public void Builds_path_from_tokyo_date_and_stamp_when_directory_missing()
     {
         using var doc = JsonDocument.Parse("""{"name":"Cody Lee Berry"}""");
         var folders = new OutputFolderService();
         var when = new DateTime(2026, 11, 21, 14, 30, 5);
-        var leaf = folders.BuildLeafFolderName(doc.RootElement, when, out var fallback);
+        var relative = folders.BuildRelativeOutputPath(doc.RootElement, new DateTimeOffset(when, TimeSpan.FromHours(9)), out var fallback);
         Assert.True(fallback);
-        Assert.Equal("2026-11-21_14-30-05", leaf);
+        Assert.Equal(Path.Combine("2026-11-21", "14-30-05"), relative);
+    }
+
+    [Fact]
+    public void Preview_path_nests_under_output_root()
+    {
+        using var doc = JsonDocument.Parse("""{"directory":"Demo"}""");
+        var folders = new OutputFolderService();
+        var when = new DateTimeOffset(2026, 11, 25, 9, 5, 1, TimeSpan.FromHours(9));
+        var root = Path.Combine(Path.GetTempPath(), "cv-out");
+        var preview = folders.BuildPreviewPath(root, doc.RootElement, when);
+        Assert.Equal(Path.Combine(root, "2026-11-25", "09-05-01_Demo"), preview);
     }
 
     [Fact]

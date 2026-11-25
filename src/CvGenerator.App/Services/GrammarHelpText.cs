@@ -138,14 +138,14 @@ Rules:
 
 5) Output folder fields
 -----------------------
-The export folder is named from:
+The export folder uses Tokyo time (JST) and optional JSON:
 
   directory   (optional string)
 
 Folder shape:
-  {OutputRoot}/{directory}/
+  {OutputRoot}/{yyyy-MM-dd}/{HH-mm-ss}_{directory}/
   or, if directory is missing/empty:
-  {OutputRoot}/{yyyy-MM-dd_HH-mm-ss}/
+  {OutputRoot}/{yyyy-MM-dd}/{HH-mm-ss}/
 
 Artifacts written there:
   resume.json
