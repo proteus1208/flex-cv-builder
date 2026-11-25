@@ -12,6 +12,8 @@ public sealed class GenerationRequest
     public required string TemplatePath { get; init; }
     public required string OutputRoot { get; init; }
     public string? LibreOfficePath { get; init; }
+    /// <summary>Fixed clock so clipboard preview path matches the created folder.</summary>
+    public DateTimeOffset? Instant { get; init; }
 }
 
 public sealed class GenerationService
@@ -52,7 +54,7 @@ public sealed class GenerationService
             if (issues.HasErrorsInSteps("Template"))
                 return Failed(issues);
 
-            var outputDir = _folders.CreateOutputDirectory(request.OutputRoot, root, issues);
+            var outputDir = _folders.CreateOutputDirectory(request.OutputRoot, root, issues, request.Instant);
             if (string.IsNullOrEmpty(outputDir) || issues.HasErrorsInSteps("Folder"))
                 return Failed(issues);
 

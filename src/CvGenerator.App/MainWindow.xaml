@@ -6,10 +6,12 @@
         Title="CV Generator"
         Width="1280"
         Height="860"
-        MinWidth="960"
-        MinHeight="640"
+        MinWidth="720"
+        MinHeight="520"
         WindowStartupLocation="CenterScreen">
-  <blazor:BlazorWebView HostPage="wwwroot/index.html" Services="{DynamicResource services}">
+  <blazor:BlazorWebView HostPage="wwwroot/index.html"
+                        Services="{DynamicResource services}"
+                        BlazorWebViewInitialized="OnBlazorWebViewInitialized">
     <blazor:BlazorWebView.RootComponents>
       <blazor:RootComponent Selector="#app" ComponentType="{x:Type local:Routes}" />
     </blazor:BlazorWebView.RootComponents>

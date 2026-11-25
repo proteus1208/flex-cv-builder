@@ -10,7 +10,7 @@ Windows standalone app that merges **any-structure CV JSON** into a **DOCX templ
 Output folders use **Tokyo time (JST)** plus an optional JSON `directory` field:
 
 ```text
-{OutputRoot}/{yyyy-MM-dd}/{HH-mm-ss}_{directory}/
+{OutputRoot}/{yyyy-MM-dd}/{directory}/
 {OutputRoot}/{yyyy-MM-dd}/{HH-mm-ss}/   # when directory is absent
 ```
 

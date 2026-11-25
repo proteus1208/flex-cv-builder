@@ -608,6 +608,24 @@ public sealed class AppState : IDisposable
         Issues = Array.Empty<GenerationIssue>();
         Notify();
 
+        // Freeze the clock, copy the predicted output path, then create folder + files.
+        var instant = DateTimeOffset.UtcNow;
+        string? predictedPath = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(JsonText) ? "{}" : JsonText);
+            predictedPath = _folders.BuildPreviewPath(OutputRoot, doc.RootElement, instant);
+            System.Windows.Clipboard.SetText(predictedPath);
+            OutputPreview = predictedPath;
+            IsCopyArmed = false;
+            ShowCopyCheckIcon = true;
+            Notify();
+        }
+        catch
+        {
+            // Invalid JSON — generation reports the real error; skip clipboard.
+        }
+
         try
         {
             await Task.Run(() =>
@@ -619,7 +637,8 @@ public sealed class AppState : IDisposable
                     JsonText = JsonText,
                     TemplatePath = templatePath ?? string.Empty,
                     OutputRoot = OutputRoot,
-                    LibreOfficePath = LibreOfficePath
+                    LibreOfficePath = LibreOfficePath,
+                    Instant = instant
                 }, issues);
 
                 Issues = result.Issues;
@@ -627,6 +646,16 @@ public sealed class AppState : IDisposable
                 LastOutputDirectory = result.OutputDirectory;
             });
             PersistJsonNow();
+
+            // If uniqueness renamed the folder, put the real path on the clipboard.
+            if (!string.IsNullOrWhiteSpace(LastOutputDirectory) &&
+                !string.Equals(LastOutputDirectory, predictedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                try { System.Windows.Clipboard.SetText(LastOutputDirectory); }
+                catch { /* best-effort */ }
+            }
+
+            _ = ResetCopyButtonLater();
         }
         finally
         {
@@ -663,22 +692,11 @@ public sealed class AppState : IDisposable
         RefreshPreviewAndLiveValidation();
         Notify();
 
+        // GenerateAllAsync copies the predicted folder path first, then creates it and writes files.
         await GenerateAllAsync();
 
         var path = LastOutputDirectory;
-        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
-            return null;
-
-        try
-        {
-            System.Windows.Clipboard.SetText(path);
-        }
-        catch
-        {
-            // generation succeeded; clipboard write is best-effort
-        }
-
-        return path;
+        return string.IsNullOrWhiteSpace(path) || !Directory.Exists(path) ? null : path;
     }
 
     public static bool LooksLikeJsonObject(string? text)

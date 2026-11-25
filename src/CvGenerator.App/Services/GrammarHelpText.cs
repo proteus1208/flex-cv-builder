@@ -142,8 +142,8 @@ The export folder uses Tokyo time (JST) and optional JSON:
 
   directory   (optional string)
 
-Folder shape:
-  {OutputRoot}/{yyyy-MM-dd}/{HH-mm-ss}_{directory}/
+Folder shape (date = Tokyo / JST):
+  {OutputRoot}/{yyyy-MM-dd}/{directory}/
   or, if directory is missing/empty:
   {OutputRoot}/{yyyy-MM-dd}/{HH-mm-ss}/
 

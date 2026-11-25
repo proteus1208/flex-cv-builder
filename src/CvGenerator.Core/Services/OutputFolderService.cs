@@ -61,8 +61,8 @@ public sealed class OutputFolderService
         => CreateOutputDirectory(outputRoot, root, issues, ToInstant(date));
 
     /// <summary>
-    /// Relative output path under the root:
-    /// <c>{yyyy-MM-dd}/{HH-mm-ss}_{directory}</c> (Tokyo),
+    /// Relative output path under the root (Tokyo time):
+    /// <c>{yyyy-MM-dd}/{directory}</c>,
     /// or <c>{yyyy-MM-dd}/{HH-mm-ss}</c> when JSON <c>directory</c> is missing.
     /// </summary>
     public string BuildRelativeOutputPath(JsonElement root, out bool usedFallback)
@@ -78,7 +78,7 @@ public sealed class OutputFolderService
         if (!string.IsNullOrWhiteSpace(directory))
         {
             usedFallback = false;
-            return Path.Combine(dateDir, $"{stamp}_{directory}");
+            return Path.Combine(dateDir, directory);
         }
 
         usedFallback = true;

@@ -4,7 +4,9 @@ using CvGenerator.App.Services;
 using CvGenerator.Core.Services;
 using CvGenerator.Core.Settings;
 using CvGenerator.Docx.Services;
+using Microsoft.AspNetCore.Components.WebView;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Web.WebView2.Core;
 
 namespace CvGenerator.App;
 
@@ -65,6 +67,20 @@ public partial class MainWindow : Window
             _hotKey = null;
             _state.Dispose();
         };
+    }
+
+    private void OnBlazorWebViewInitialized(object? sender, BlazorWebViewInitializedEventArgs e)
+    {
+        // Windows dark mode otherwise paints white textarea glyphs on a white editor.
+        try
+        {
+            e.WebView.CoreWebView2.Profile.PreferredColorScheme =
+                CoreWebView2PreferredColorScheme.Light;
+        }
+        catch
+        {
+            // Older WebView2 runtimes may not expose PreferredColorScheme.
+        }
     }
 
     private async void OnClipboardHotKey()

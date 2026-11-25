@@ -8,21 +8,20 @@ namespace CvGenerator.Core.Tests;
 public class OutputFolderAndNotesTests
 {
     [Fact]
-    public void Builds_path_from_tokyo_date_stamp_and_directory()
+    public void Builds_path_from_tokyo_date_and_directory()
     {
         using var doc = JsonDocument.Parse("""
         {
-          "directory": "Acme-Backend-Role",
+          "directory": "CODY LEE BERRY_Volantsoft Inc_C# .NET REST API SQL",
           "name": "Cody Lee Berry",
           "role": "Senior Engineer"
         }
         """);
         var folders = new OutputFolderService();
-        // Unspecified DateTime = Tokyo wall clock.
-        var when = new DateTime(2026, 11, 21, 14, 30, 5);
-        var relative = folders.BuildRelativeOutputPath(doc.RootElement, new DateTimeOffset(when, TimeSpan.FromHours(9)), out var fallback);
+        var when = new DateTimeOffset(2026, 11, 21, 14, 30, 5, TimeSpan.FromHours(9));
+        var relative = folders.BuildRelativeOutputPath(doc.RootElement, when, out var fallback);
         Assert.False(fallback);
-        Assert.Equal(Path.Combine("2026-11-21", "14-30-05_Acme-Backend-Role"), relative);
+        Assert.Equal(Path.Combine("2026-11-21", "CODY LEE BERRY_Volantsoft Inc_C# .NET REST API SQL"), relative);
     }
 
     [Fact]
@@ -30,21 +29,43 @@ public class OutputFolderAndNotesTests
     {
         using var doc = JsonDocument.Parse("""{"name":"Cody Lee Berry"}""");
         var folders = new OutputFolderService();
-        var when = new DateTime(2026, 11, 21, 14, 30, 5);
-        var relative = folders.BuildRelativeOutputPath(doc.RootElement, new DateTimeOffset(when, TimeSpan.FromHours(9)), out var fallback);
+        var when = new DateTimeOffset(2026, 11, 21, 14, 30, 5, TimeSpan.FromHours(9));
+        var relative = folders.BuildRelativeOutputPath(doc.RootElement, when, out var fallback);
         Assert.True(fallback);
         Assert.Equal(Path.Combine("2026-11-21", "14-30-05"), relative);
     }
 
     [Fact]
-    public void Preview_path_nests_under_output_root()
+    public void Preview_path_nests_under_output_root_date_folder()
     {
         using var doc = JsonDocument.Parse("""{"directory":"Demo"}""");
         var folders = new OutputFolderService();
         var when = new DateTimeOffset(2026, 11, 25, 9, 5, 1, TimeSpan.FromHours(9));
         var root = Path.Combine(Path.GetTempPath(), "cv-out");
         var preview = folders.BuildPreviewPath(root, doc.RootElement, when);
-        Assert.Equal(Path.Combine(root, "2026-11-25", "09-05-01_Demo"), preview);
+        Assert.Equal(Path.Combine(root, "2026-11-25", "Demo"), preview);
+    }
+
+    [Fact]
+    public void CreateOutputDirectory_creates_date_then_directory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "cvgen-out-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var doc = JsonDocument.Parse("""{"directory":"CODY LEE BERRY_Volantsoft Inc"}""");
+            var issues = new IssueCollector();
+            var when = new DateTimeOffset(2026, 11, 26, 12, 0, 0, TimeSpan.FromHours(9));
+            var created = new OutputFolderService().CreateOutputDirectory(root, doc.RootElement, issues, when);
+
+            Assert.True(Directory.Exists(created));
+            Assert.Equal(Path.Combine(root, "2026-11-26", "CODY LEE BERRY_Volantsoft Inc"), created);
+            Assert.Equal("2026-11-26", Directory.GetParent(created)!.Name);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
     }
 
     [Fact]
